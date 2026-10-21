@@ -15,32 +15,68 @@ export default function Home() {
   const [section, setSection] = useState<Section>("swipe");
   const [checkingSession, setCheckingSession] = useState(true);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [sessionError, setSessionError] = useState(false);
 
   useEffect(() => {
     let mounted = true;
+    let resolved = false;
 
-    async function checkSession() {
-      const { data, error } = await supabase.auth.getSession();
-
-      if (mounted) {
-        setLoggedIn(!error && !!data.session);
+    const timeout = window.setTimeout(() => {
+      if (mounted && !resolved) {
+        setSessionError(true);
         setCheckingSession(false);
       }
-    }
+    }, 10000);
 
-    checkSession();
+    async function checkSession() {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+
+        if (!mounted || resolved) return;
+
+        resolved = true;
+        window.clearTimeout(timeout);
+
+        if (error) {
+          console.error("Error comprobando sesión:", error);
+          setSessionError(true);
+          setLoggedIn(false);
+        } else {
+          setSessionError(false);
+          setLoggedIn(!!data.session);
+        }
+
+        setCheckingSession(false);
+      } catch (error) {
+        console.error("Error comprobando sesión:", error);
+
+        if (mounted && !resolved) {
+          resolved = true;
+          window.clearTimeout(timeout);
+          setSessionError(true);
+          setLoggedIn(false);
+          setCheckingSession(false);
+        }
+      }
+    }
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (mounted) {
-        setLoggedIn(!!session);
-        setCheckingSession(false);
-      }
+      if (!mounted || resolved) return;
+
+      resolved = true;
+      window.clearTimeout(timeout);
+      setSessionError(false);
+      setLoggedIn(!!session);
+      setCheckingSession(false);
     });
+
+    void checkSession();
 
     return () => {
       mounted = false;
+      window.clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
@@ -49,6 +85,23 @@ export default function Home() {
     return (
       <main className="flex min-h-screen items-center justify-center bg-gray-50">
         <p className="text-gray-600">Comprobando sesión...</p>
+      </main>
+    );
+  }
+
+  if (sessionError) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gray-50 p-6">
+        <p className="text-center text-gray-700">
+          No se ha podido comprobar la sesión. Comprueba tu conexión e inténtalo de nuevo.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="rounded-xl bg-black px-5 py-3 text-sm font-medium text-white"
+        >
+          Reintentar
+        </button>
       </main>
     );
   }
@@ -82,7 +135,7 @@ export default function Home() {
                 : "text-gray-600"
             }`}
           >
-            ❤️ Elegir
+            Elegir
           </button>
 
           <button
@@ -94,7 +147,7 @@ export default function Home() {
                 : "text-gray-600"
             }`}
           >
-            📅 Menú semanal
+            Menú semanal
           </button>
 
           <button
@@ -106,7 +159,7 @@ export default function Home() {
                 : "text-gray-600"
             }`}
           >
-            ➕ Platos
+            Platos
           </button>
         </div>
       </nav>
