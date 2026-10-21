@@ -140,7 +140,7 @@ export default function AuthPanel() {
 
   return (
     <main className="mx-auto max-w-md space-y-4 p-6">
-      <h1 className="text-2xl font-bold">Tinder Meal</h1>
+      <h1 className="text-2xl font-bold">Swippy Meal</h1>
 
       <p>Accede a tu cuenta para preparar vuestro menú.</p>
 
