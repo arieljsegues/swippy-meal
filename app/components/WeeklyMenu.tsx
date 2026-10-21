@@ -1,3 +1,4 @@
+
 "use client";
 
 import {
@@ -68,6 +69,7 @@ function getWeekday(date: Date) {
 
 function getInitialRange() {
   const monday = getMonday(new Date());
+
   return {
     start: dateToKey(monday),
     end: dateToKey(addDays(monday, 6)),
@@ -82,20 +84,53 @@ function normalizeSearch(value: string) {
     .toLowerCase();
 }
 
+function isValidDateKey(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const date = keyToDate(value);
+
+  return !Number.isNaN(date.getTime()) && dateToKey(date) === value;
+}
+
+function formatWeekRange(start: string, end: string) {
+  const startDate = keyToDate(start);
+  const endDate = keyToDate(end);
+
+  const sameMonth =
+    startDate.getMonth() === endDate.getMonth() &&
+    startDate.getFullYear() === endDate.getFullYear();
+
+  if (sameMonth) {
+    return `${startDate.getDate()} – ${endDate.toLocaleDateString("es-ES", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    })}`;
+  }
+
+  return `${startDate.toLocaleDateString("es-ES", {
+    day: "numeric",
+    month: "short",
+  })} – ${endDate.toLocaleDateString("es-ES", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  })}`;
+}
+
 export default function WeeklyMenu() {
+  const initialRange = getInitialRange();
+
+  const [weekStart, setWeekStart] = useState(initialRange.start);
+  const [rangeInitialized, setRangeInitialized] = useState(false);
+
   const [availableDishes, setAvailableDishes] = useState<Dish[]>([]);
   const [dishSearch, setDishSearch] = useState("");
+
   const [pickerTarget, setPickerTarget] = useState<{
     dateKey: string;
     mealType: MealType;
   } | null>(null);
-
-  const initialRange = getInitialRange();
-
-  const [startDate, setStartDate] = useState(initialRange.start);
-  const [endDate, setEndDate] = useState(initialRange.end);
-  const [appliedStart, setAppliedStart] = useState(initialRange.start);
-  const [appliedEnd, setAppliedEnd] = useState(initialRange.end);
 
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,6 +142,8 @@ export default function WeeklyMenu() {
   const longPressTriggered = useRef(false);
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
 
+  const weekEnd = dateToKey(addDays(keyToDate(weekStart), 6));
+
   const cancelLongPress = useCallback(() => {
     if (longPressTimer.current !== null) {
       window.clearTimeout(longPressTimer.current);
@@ -115,36 +152,96 @@ export default function WeeklyMenu() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const week = params.get("week");
+
+    if (
+      week &&
+      isValidDateKey(week) &&
+      dateToKey(getMonday(keyToDate(week))) === week
+    ) {
+      setWeekStart(week);
+    }
+
+    setRangeInitialized(true);
+  }, []);
+
+  useEffect(() => {
     return () => cancelLongPress();
   }, [cancelLongPress]);
 
+  const changeWeek = useCallback((offset: number) => {
+  const nextMonday = dateToKey(
+    addDays(keyToDate(weekStart), offset * 7)
+  );
+
+  setWeekStart(nextMonday);
+  setSelectedSlot(null);
+  setMessage("");
+
+  const params = new URLSearchParams(window.location.search);
+  params.set("week", nextMonday);
+
+  const query = params.toString();
+
+  window.history.replaceState(
+    null,
+    "",
+    `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
+  );
+}, [weekStart]);
+
+const goToCurrentWeek = useCallback(() => {
+  const monday = dateToKey(getMonday(new Date()));
+
+  setWeekStart(monday);
+  setSelectedSlot(null);
+  setMessage("");
+
+  const params = new URLSearchParams(window.location.search);
+  params.set("week", monday);
+
+  const query = params.toString();
+
+  window.history.replaceState(
+    null,
+    "",
+    `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
+  );
+}, []);
+
   const getRangeDates = useCallback(() => {
     const dates: Date[] = [];
-    const start = keyToDate(appliedStart);
-    const end = keyToDate(appliedEnd);
+
+    if (
+      !isValidDateKey(weekStart) ||
+      !isValidDateKey(weekEnd) ||
+      weekStart > weekEnd
+    ) {
+      return dates;
+    }
+
+    const start = keyToDate(weekStart);
+    const end = keyToDate(weekEnd);
 
     for (let date = start; date <= end; date = addDays(date, 1)) {
       dates.push(new Date(date));
     }
 
     return dates;
-  }, [appliedStart, appliedEnd]);
+  }, [weekStart, weekEnd]);
 
   const loadMenu = useCallback(async () => {
+    if (!rangeInitialized) return;
+
     setLoading(true);
     setMessage("");
     setSelectedSlot(null);
 
     try {
-      if (!appliedStart || !appliedEnd || appliedStart > appliedEnd) {
-        setSlots([]);
-        setMessage("Selecciona un intervalo de fechas válido.");
-        return;
-      }
-
       const dates: Date[] = [];
-      const start = keyToDate(appliedStart);
-      const end = keyToDate(appliedEnd);
+      const start = keyToDate(weekStart);
+      const end = keyToDate(weekEnd);
 
       for (let date = start; date <= end; date = addDays(date, 1)) {
         dates.push(new Date(date));
@@ -188,10 +285,12 @@ export default function WeeklyMenu() {
 
       const finalSlots: Slot[] = (rowsWithMenu ?? []).map((raw) => {
         const row = raw as unknown as Slot & { menu_id: string };
-        const weekStart = weekByMenuId.get(row.menu_id);
+        const menuWeekStart = weekByMenuId.get(row.menu_id);
 
-        if (!weekStart) {
-          throw new Error(`No se encontró la semana del menú ${row.menu_id}.`);
+        if (!menuWeekStart) {
+          throw new Error(
+            `No se encontró la semana del menú ${row.menu_id}.`
+          );
         }
 
         return {
@@ -203,7 +302,7 @@ export default function WeeklyMenu() {
           is_for_one: row.is_for_one ?? false,
           dishes: row.dishes,
           date_key: dateToKey(
-            addDays(keyToDate(weekStart), row.day_of_week)
+            addDays(keyToDate(menuWeekStart), row.day_of_week)
           ),
         };
       });
@@ -211,6 +310,7 @@ export default function WeeklyMenu() {
       setSlots(finalSlots);
     } catch (error) {
       setSlots([]);
+
       setMessage(
         error instanceof Error
           ? `Error al cargar el menú: ${error.message}`
@@ -219,18 +319,23 @@ export default function WeeklyMenu() {
     } finally {
       setLoading(false);
     }
-  }, [appliedStart, appliedEnd]);
+  }, [weekStart, weekEnd, rangeInitialized]);
 
   useEffect(() => {
     void loadMenu();
   }, [loadMenu]);
 
   useEffect(() => {
+    let active = true;
+
     async function loadDishes() {
       const { data, error } = await supabase
         .from("dishes")
         .select("id, name")
+        .eq("household_id", HOUSEHOLD_ID)
         .order("name");
+
+      if (!active) return;
 
       if (error) {
         console.error("Error cargando platos:", error);
@@ -242,6 +347,10 @@ export default function WeeklyMenu() {
     }
 
     void loadDishes();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   function findSlot(dateKey: string, mealType: MealType) {
@@ -259,14 +368,14 @@ export default function WeeklyMenu() {
   }
 
   async function ensureMenuIdForDate(dateKey: string) {
-    const weekStart = dateToKey(getMonday(keyToDate(dateKey)));
+    const monday = dateToKey(getMonday(keyToDate(dateKey)));
 
     const { data, error } = await supabase
       .from("weekly_menus")
       .upsert(
         {
           household_id: HOUSEHOLD_ID,
-          week_start: weekStart,
+          week_start: monday,
         },
         { onConflict: "household_id,week_start" }
       )
@@ -282,6 +391,7 @@ export default function WeeklyMenu() {
     if (busy) return;
 
     const existing = findSlot(dateKey, mealType);
+
     setBusy(true);
     setMessage("");
 
@@ -297,6 +407,7 @@ export default function WeeklyMenu() {
         setSlots((current) =>
           current.filter((slot) => slot.id !== existing.id)
         );
+
         return;
       }
 
@@ -358,7 +469,9 @@ export default function WeeklyMenu() {
 
       if (error) throw error;
 
-      setSlots((current) => current.filter((slot) => slot.id !== slotId));
+      setSlots((current) =>
+        current.filter((slot) => slot.id !== slotId)
+      );
 
       if (selectedSlot === slotId) setSelectedSlot(null);
     } catch (error) {
@@ -376,6 +489,7 @@ export default function WeeklyMenu() {
     if (busy || !slot.dish_id || isBlocked(slot)) return;
 
     const nextValue = !slot.is_for_one;
+
     setBusy(true);
     setMessage("");
 
@@ -389,7 +503,9 @@ export default function WeeklyMenu() {
 
       setSlots((current) =>
         current.map((item) =>
-          item.id === slot.id ? { ...item, is_for_one: nextValue } : item
+          item.id === slot.id
+            ? { ...item, is_for_one: nextValue }
+            : item
         )
       );
     } catch (error) {
@@ -481,6 +597,7 @@ export default function WeeklyMenu() {
         special_label: source.special_label,
         is_for_one: source.is_for_one,
       };
+
       const targetValues = {
         dish_id: target.dish_id,
         special_label: target.special_label,
@@ -630,27 +747,16 @@ export default function WeeklyMenu() {
 
   const dates = getRangeDates();
 
-  const dateLabel =
-    dates.length > 0
-      ? `${keyToDate(appliedStart).toLocaleDateString("es-ES", {
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-        })} – ${keyToDate(appliedEnd).toLocaleDateString("es-ES", {
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-        })}`
-      : "Selecciona un intervalo";
+  const dateLabel = formatWeekRange(weekStart, weekEnd);
 
   const filteredDishes = availableDishes.filter((dish) =>
     normalizeSearch(dish.name).includes(normalizeSearch(dishSearch))
   );
 
   return (
-    <main className="mx-auto min-h-screen max-w-7xl space-y-5 bg-[#fafaf9] p-3 pb-8 text-[#292524] sm:p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+    <main className="mx-auto flex h-[100dvh] w-full max-w-7xl flex-col gap-3 overflow-hidden bg-[#fafaf9] p-3 text-[#292524] sm:p-6">
+      <header className="flex shrink-0 items-center justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
             Nuestro menú
           </h1>
@@ -658,56 +764,62 @@ export default function WeeklyMenu() {
         </div>
 
         <button
+          type="button"
           onClick={() => void loadMenu()}
           disabled={loading || busy}
-          className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-medium transition hover:bg-stone-50 disabled:opacity-50"
+          className="shrink-0 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-medium transition hover:bg-stone-50 disabled:opacity-50"
         >
           Actualizar
         </button>
       </header>
 
-      <section className="flex flex-wrap items-end gap-3 rounded-2xl border border-stone-200 bg-white p-4">
-        <label className="flex min-w-[140px] flex-1 flex-col gap-1.5 text-xs font-medium text-stone-500">
-          Desde
-          <input
-            type="date"
-            value={startDate}
-            onChange={(event) => setStartDate(event.target.value)}
-            className="rounded-lg border border-stone-200 bg-white p-2.5 text-sm text-stone-800 outline-none focus:border-stone-400"
-          />
-        </label>
+      {/* Selector semanal */}
+      <section className="flex shrink-0 items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white p-3 sm:p-4">
+        <button
+          type="button"
+          onClick={() => changeWeek(-1)}
+          disabled={loading || busy}
+          aria-label="Semana anterior"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-2xl text-stone-700 transition hover:bg-stone-100 active:scale-95 disabled:opacity-40"
+        >
+          ‹
+        </button>
 
-        <label className="flex min-w-[140px] flex-1 flex-col gap-1.5 text-xs font-medium text-stone-500">
-          Hasta
-          <input
-            type="date"
-            value={endDate}
-            min={startDate}
-            onChange={(event) => setEndDate(event.target.value)}
-            className="rounded-lg border border-stone-200 bg-white p-2.5 text-sm text-stone-800 outline-none focus:border-stone-400"
-          />
-        </label>
+        <div className="min-w-0 text-center">
+          <h2 className="text-sm font-semibold text-stone-900 sm:text-base">
+            Semana del{" "}
+            {keyToDate(weekStart).toLocaleDateString("es-ES", {
+              day: "numeric",
+              month: "long",
+            })}
+          </h2>
+
+          <p className="mt-1 text-xs text-stone-500 sm:text-sm">
+            {dateLabel}
+          </p>
+
+          <button
+            type="button"
+            onClick={goToCurrentWeek}
+            disabled={loading || busy}
+            className="mt-1 text-xs font-medium text-stone-600 underline underline-offset-2 hover:text-stone-900 disabled:opacity-40"
+          >
+            Ir a esta semana
+          </button>
+        </div>
 
         <button
-          onClick={() => {
-            if (!startDate || !endDate || startDate > endDate) {
-              setMessage("Selecciona un intervalo de fechas válido.");
-              return;
-            }
-
-            setAppliedStart(startDate);
-            setAppliedEnd(endDate);
-            setSelectedSlot(null);
-            setMessage("");
-          }}
+          type="button"
+          onClick={() => changeWeek(1)}
           disabled={loading || busy}
-          className="rounded-lg bg-stone-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-stone-700 disabled:opacity-50"
+          aria-label="Semana siguiente"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-2xl text-stone-700 transition hover:bg-stone-100 active:scale-95 disabled:opacity-40"
         >
-          Mostrar fechas
+          ›
         </button>
       </section>
 
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-1 text-xs text-stone-600">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-stone-600">
         <span className="flex items-center gap-2">
           <span className="h-3 w-3 rounded-sm bg-[#e6f3e9]" />
           Para 2
@@ -730,216 +842,253 @@ export default function WeeklyMenu() {
         </span>
       </div>
 
-      {loading ? (
-        <div className="rounded-2xl border border-stone-200 bg-white p-10 text-center text-sm text-stone-500">
-          Cargando menú...
-        </div>
-      ) : dates.length === 0 ? (
-        <div className="rounded-2xl border border-stone-200 bg-white p-10 text-center text-sm text-stone-500">
-          Selecciona un intervalo de fechas válido.
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
-          {dates.map((date) => {
-            const dateKey = dateToKey(date);
-            const dayName = date.toLocaleDateString("es-ES", {
-              weekday: "long",
-            });
-            const formattedDate = date.toLocaleDateString("es-ES", {
-              day: "numeric",
-              month: "short",
-            });
-            const daySlots = slots.filter(
-              (slot) => slot.date_key === dateKey
-            );
-            const filledCount = daySlots.filter(
-              (slot) => Boolean(slot.dish_id) && !isBlocked(slot)
-            ).length;
-
-            return (
-              <section
-                key={dateKey}
-                className="min-w-0 space-y-2 rounded-2xl border border-stone-200 bg-white p-2.5"
-              >
-                <header className="flex min-h-[54px] items-center justify-between gap-1 border-b border-stone-100 px-1 pb-2">
-                  <div className="min-w-0">
-                    <h2 className="truncate text-sm font-semibold capitalize text-stone-800">
-                      {dayName}
-                    </h2>
-                    <p className="mt-0.5 text-xs text-stone-500">
-                      {formattedDate}
-                    </p>
-                  </div>
-                  <span className="shrink-0 rounded-md bg-stone-100 px-1.5 py-1 text-[10px] font-medium text-stone-500">
-                    {filledCount}/2
-                  </span>
-                </header>
-
-                {(
-                  [
-                    { label: "Comida", type: "lunch" },
-                    { label: "Cena", type: "dinner" },
-                  ] as const
-                ).map(({ label, type }) => {
-                  const slot = findSlot(dateKey, type);
-                  const blocked = slot ? isBlocked(slot) : false;
-                  const selected = slot?.id === selectedSlot;
-
-                  const dishName = slot
-                    ? slot.dishes?.name ??
-                      (blocked
-                        ? "No disponible"
-                        : slot.special_label ?? "Opción especial")
-                    : "Sin asignar";
-
-                  const slotStyle = selected
-                    ? "border-blue-500 bg-white ring-2 ring-blue-100"
-                    : blocked
-                      ? "border-[#f4d4d0] bg-[#fbe9e7]"
-                      : slot?.is_for_one
-                        ? "border-amber-300 bg-amber-50"
-                        : slot
-                          ? "border-[#d3e8d8] bg-[#e6f3e9]"
-                          : "border-stone-200 bg-[#f5f4f1]";
-
-                  return (
-                    <div
-                      key={type}
-                      onPointerDown={(event) =>
-                        handlePointerDown(event, slot)
-                      }
-                      onPointerMove={handlePointerMove}
-                      onPointerUp={() =>
-                        handlePointerUp(slot, dateKey, type)
-                      }
-                      onPointerCancel={handlePointerCancel}
-                      className={`relative flex min-h-[142px] min-w-0 flex-col rounded-xl border p-3 pt-9 transition-colors ${slotStyle} ${
-                        slot && !blocked ? "cursor-pointer" : ""
-                      }`}
-                      style={{ touchAction: "pan-y" }}
-                    >
-                      {slot?.dish_id && !blocked && (
-                        <button
-                          type="button"
-                          aria-label="Borrar plato"
-                          title="Borrar plato"
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onPointerUp={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void removeSlot(slot.id);
-                          }}
-                          disabled={busy}
-                          className="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full text-lg leading-none text-stone-400 transition hover:bg-red-100 hover:text-red-600 disabled:opacity-50"
-                        >
-                          ×
-                        </button>
-                      )}
-
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-xs font-medium text-stone-500">
-                          {label}
-                        </span>
-                        {selected && (
-                          <span className="text-[10px] font-semibold text-blue-600">
-                            Elegido
-                          </span>
-                        )}
-                      </div>
-
-                      <p
-                        className={`mt-3 flex-1 break-words text-sm font-medium leading-snug ${
-                          blocked
-                            ? "text-[#a34c43]"
-                            : slot?.is_for_one
-                              ? "text-amber-900"
-                              : slot
-                                ? "text-[#285d3b]"
-                                : "text-stone-400"
-                        }`}
-                      >
-                        {dishName}
-                      </p>
-
-                      {slot?.is_for_one && (
-                        <span className="mt-1 text-xs font-semibold text-amber-800">
-                          👤 Solo 1 persona
-                        </span>
-                      )}
-
-                      <button
-                        type="button"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onPointerUp={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setDishSearch("");
-                          setPickerTarget({
-                            dateKey,
-                            mealType: type,
-                          });
-                        }}
-                        disabled={busy}
-                        className="mt-3 w-full rounded-lg bg-white px-2 py-2.5 text-xs font-semibold text-stone-700 shadow-sm transition hover:bg-stone-50 disabled:opacity-50"
-                      >
-                        {slot?.dish_id ? "Cambiar plato" : "Elegir plato"}
-                      </button>
-
-                      {slot?.dish_id && !blocked && (
-                        <button
-                          type="button"
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onPointerUp={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void toggleForOne(slot);
-                          }}
-                          disabled={busy}
-                          aria-pressed={slot.is_for_one}
-                          className={`mt-2 w-full rounded-lg px-2 py-2.5 text-xs font-semibold transition disabled:opacity-50 ${
-                            slot.is_for_one
-                              ? "bg-amber-200 text-amber-900 hover:bg-amber-300"
-                              : "bg-white/80 text-stone-600 hover:bg-white"
-                          }`}
-                        >
-                          {slot.is_for_one ? "👤 For 1 · ↻ For 2" : "👥 For 1"}
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onPointerUp={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void toggleBlocked(dateKey, type);
-                        }}
-                        disabled={busy || (!!slot && !blocked)}
-                        className={`mt-2 w-full rounded-lg px-2 py-2 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                          blocked
-                            ? "bg-white/80 text-[#a34c43] hover:bg-white"
-                            : "text-stone-500 hover:bg-white/80 hover:text-stone-800"
-                        }`}
-                        title={
-                          slot && !blocked
-                            ? "Quita primero el plato"
-                            : undefined
-                        }
-                      >
-                        {blocked ? "Hacer disponible" : "No disponible"}
-                      </button>
-                    </div>
-                  );
-                })}
-              </section>
-            );
-          })}
-        </div>
+      {message && (
+        <p
+          role="status"
+          className="shrink-0 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+        >
+          {message}
+        </p>
       )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {loading ? (
+          <div className="rounded-2xl border border-stone-200 bg-white p-10 text-center text-sm text-stone-500">
+            Cargando menú...
+          </div>
+        ) : dates.length === 0 ? (
+          <div className="rounded-2xl border border-stone-200 bg-white p-10 text-center text-sm text-stone-500">
+            No se pudo calcular la semana seleccionada.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+            {dates.map((date) => {
+              const dateKey = dateToKey(date);
+
+              const dayName = date.toLocaleDateString("es-ES", {
+                weekday: "long",
+              });
+
+              const formattedDate = date.toLocaleDateString("es-ES", {
+                day: "numeric",
+                month: "short",
+              });
+
+              const daySlots = slots.filter(
+                (slot) => slot.date_key === dateKey
+              );
+
+              const filledCount = daySlots.filter(
+                (slot) => Boolean(slot.dish_id) && !isBlocked(slot)
+              ).length;
+
+              return (
+                <section
+                  key={dateKey}
+                  className="min-w-0 space-y-2 rounded-2xl border border-stone-200 bg-white p-2.5"
+                >
+                  <header className="flex min-h-[54px] items-center justify-between gap-1 border-b border-stone-100 px-1 pb-2">
+                    <div className="min-w-0">
+                      <h2 className="truncate text-sm font-semibold capitalize text-stone-800">
+                        {dayName}
+                      </h2>
+                      <p className="mt-0.5 text-xs text-stone-500">
+                        {formattedDate}
+                      </p>
+                    </div>
+
+                    <span className="shrink-0 rounded-md bg-stone-100 px-1.5 py-1 text-[10px] font-medium text-stone-500">
+                      {filledCount}/2
+                    </span>
+                  </header>
+
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-1">
+                    {(
+                      [
+                        { label: "Comida", type: "lunch" },
+                        { label: "Cena", type: "dinner" },
+                      ] as const
+                    ).map(({ label, type }) => {
+                      const slot = findSlot(dateKey, type);
+                      const blocked = slot ? isBlocked(slot) : false;
+                      const selected = slot?.id === selectedSlot;
+
+                      const dishName = slot
+                        ? slot.dishes?.name ??
+                          (blocked
+                            ? "No disponible"
+                            : slot.special_label ?? "Opción especial")
+                        : "Sin asignar";
+
+                      const slotStyle = selected
+                        ? "border-blue-500 bg-white ring-2 ring-blue-100"
+                        : blocked
+                          ? "border-[#f4d4d0] bg-[#fbe9e7]"
+                          : slot?.is_for_one
+                            ? "border-amber-300 bg-amber-50"
+                            : slot
+                              ? "border-[#d3e8d8] bg-[#e6f3e9]"
+                              : "border-stone-200 bg-[#f5f4f1]";
+
+                      return (
+                        <div
+                          key={type}
+                          onPointerDown={(event) =>
+                            handlePointerDown(event, slot)
+                          }
+                          onPointerMove={handlePointerMove}
+                          onPointerUp={() =>
+                            handlePointerUp(slot, dateKey, type)
+                          }
+                          onPointerCancel={handlePointerCancel}
+                          className={`relative flex min-h-[142px] min-w-0 flex-col rounded-xl border p-2 pt-9 sm:p-3 sm:pt-9 ${slotStyle} ${
+                            slot && !blocked ? "cursor-pointer" : ""
+                          }`}
+                          style={{ touchAction: "pan-y" }}
+                        >
+                          {slot?.dish_id && !blocked && (
+                            <button
+                              type="button"
+                              aria-label="Borrar plato"
+                              title="Borrar plato"
+                              onPointerDown={(event) =>
+                                event.stopPropagation()
+                              }
+                              onPointerUp={(event) =>
+                                event.stopPropagation()
+                              }
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void removeSlot(slot.id);
+                              }}
+                              disabled={busy}
+                              className="absolute right-1 top-1 z-10 flex h-7 w-7 items-center justify-center rounded-full text-lg leading-none text-stone-400 transition hover:bg-red-100 hover:text-red-600 disabled:opacity-50 sm:right-2 sm:top-2"
+                            >
+                              ×
+                            </button>
+                          )}
+
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-xs font-medium text-stone-500">
+                              {label}
+                            </span>
+
+                            {selected && (
+                              <span className="text-[10px] font-semibold text-blue-600">
+                                Elegido
+                              </span>
+                            )}
+                          </div>
+
+                          <p
+                            className={`mt-3 flex-1 break-words text-sm font-medium leading-snug ${
+                              blocked
+                                ? "text-[#a34c43]"
+                                : slot?.is_for_one
+                                  ? "text-amber-900"
+                                  : slot
+                                    ? "text-[#285d3b]"
+                                    : "text-stone-400"
+                            }`}
+                          >
+                            {dishName}
+                          </p>
+
+                          {slot?.is_for_one && (
+                            <span className="mt-1 text-xs font-semibold text-amber-800">
+                              👤 Solo 1 persona
+                            </span>
+                          )}
+
+                          <button
+                            type="button"
+                            onPointerDown={(event) =>
+                              event.stopPropagation()
+                            }
+                            onPointerUp={(event) =>
+                              event.stopPropagation()
+                            }
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setDishSearch("");
+                              setPickerTarget({
+                                dateKey,
+                                mealType: type,
+                              });
+                            }}
+                            disabled={busy}
+                            className="mt-3 w-full rounded-lg bg-white px-1.5 py-2.5 text-xs font-semibold text-stone-700 shadow-sm transition hover:bg-stone-50 disabled:opacity-50 sm:px-2"
+                          >
+                            {slot?.dish_id
+                              ? "Cambiar plato"
+                              : "Elegir plato"}
+                          </button>
+
+                          {slot?.dish_id && !blocked && (
+                            <button
+                              type="button"
+                              onPointerDown={(event) =>
+                                event.stopPropagation()
+                              }
+                              onPointerUp={(event) =>
+                                event.stopPropagation()
+                              }
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void toggleForOne(slot);
+                              }}
+                              disabled={busy}
+                              aria-pressed={slot.is_for_one}
+                              className={`mt-2 w-full rounded-lg px-1 py-2.5 text-xs font-semibold transition disabled:opacity-50 sm:px-2 ${
+                                slot.is_for_one
+                                  ? "bg-amber-200 text-amber-900 hover:bg-amber-300"
+                                  : "bg-white/80 text-stone-600 hover:bg-white"
+                              }`}
+                            >
+                              {slot.is_for_one ? "👤 1 · ↻ 2" : "👥 Para 1"}
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onPointerDown={(event) =>
+                              event.stopPropagation()
+                            }
+                            onPointerUp={(event) =>
+                              event.stopPropagation()
+                            }
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void toggleBlocked(dateKey, type);
+                            }}
+                            disabled={busy || (!!slot && !blocked)}
+                            className={`mt-2 w-full rounded-lg px-1 py-2 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 sm:px-2 ${
+                              blocked
+                                ? "bg-white/80 text-[#a34c43] hover:bg-white"
+                                : "text-stone-500 hover:bg-white/80 hover:text-stone-800"
+                            }`}
+                            title={
+                              slot && !blocked
+                                ? "Quita primero el plato"
+                                : undefined
+                            }
+                          >
+                            {blocked ? "Hacer disponible" : "No disponible"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {pickerTarget && (
         <div
-          className="fixed inset-0 z-[100] flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4"
+          className="fixed inset-0 z-[100] flex items-end justify-center overflow-hidden bg-black/40 p-0 sm:items-center sm:p-4"
           onClick={() => {
             if (!busy) setPickerTarget(null);
           }}
@@ -951,7 +1100,7 @@ export default function WeeklyMenu() {
             className="flex max-h-[85dvh] w-full max-w-lg flex-col rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex shrink-0 items-center justify-between gap-3">
               <div>
                 <h2
                   id="dish-picker-title"
@@ -990,11 +1139,11 @@ export default function WeeklyMenu() {
               type="search"
               value={dishSearch}
               onChange={(event) => setDishSearch(event.target.value)}
-              placeholder="Buscar plato... ej. mac"
-              className="mt-4 w-full rounded-xl border border-stone-200 px-4 py-3 text-sm outline-none focus:border-stone-500"
+              placeholder="Buscar plato..."
+              className="mt-4 w-full shrink-0 rounded-xl border border-stone-200 px-4 py-3 text-sm outline-none focus:border-stone-500"
             />
 
-            <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
+            <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain">
               {filteredDishes.map((dish) => (
                 <button
                   key={dish.id}
@@ -1021,15 +1170,6 @@ export default function WeeklyMenu() {
             </div>
           </section>
         </div>
-      )}
-
-      {message && (
-        <p
-          role="status"
-          className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"
-        >
-          {message}
-        </p>
       )}
     </main>
   );
