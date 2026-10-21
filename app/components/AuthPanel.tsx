@@ -9,218 +9,181 @@ export default function AuthPanel() {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [mode, setMode] = useState<"login" | "signup">("login");
 
-  async function refreshUser() {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
     setLoading(true);
     setMessage("");
 
     try {
-      const { data, error } = await supabase.auth.getUser();
-
-      if (error || !data.user) {
-        setUserId(null);
-        setMessage("No hay una sesión activa. Inicia sesión.");
-        return;
-      }
-
-      setUserId(data.user.id);
-      setMessage("Sesión comprobada correctamente.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function signUp() {
-    setLoading(true);
-    setMessage("");
-
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-      });
-
-      if (error) {
-        setMessage(`Error al crear la cuenta: ${error.message}`);
-      } else if (!data.session) {
-        setMessage(
-          "Revisa tu correo para confirmar la cuenta y después inicia sesión."
-        );
-      } else {
-        setUserId(data.user?.id ?? null);
-        setMessage("Cuenta creada correctamente.");
-      }
-    } catch {
-      setMessage("No se pudo crear la cuenta. Inténtalo de nuevo.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function signIn() {
-    setLoading(true);
-    setMessage("");
-
-    try {
-      const { data, error } =
-        await supabase.auth.signInWithPassword({
-          email,
+      if (mode === "login") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
           password,
         });
 
-      if (error) {
-        setMessage(`Error al iniciar sesión: ${error.message}`);
+        if (error) {
+          setMessage(
+            error.message === "Invalid login credentials"
+              ? "El correo o la contraseña no son correctos."
+              : error.message
+          );
+        }
       } else {
-        setUserId(data.user.id);
-        setMessage("Sesión iniciada correctamente.");
-      }
-    } catch {
-      setMessage("No se pudo iniciar sesión. Inténtalo de nuevo.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function createHousehold() {
-    setLoading(true);
-    setMessage("");
-
-    try {
-      const { data: userData, error: userError } =
-        await supabase.auth.getUser();
-
-      if (userError || !userData.user) {
-        setUserId(null);
-        setMessage("Tu sesión ha caducado. Inicia sesión de nuevo.");
-        return;
-      }
-
-      const { error } = await supabase
-        .from("households")
-        .insert({
-          name: "Nuestro menú",
-          created_by: userData.user.id,
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
         });
 
-      if (error) {
-        console.error(
-          "Error de Supabase:",
-          JSON.stringify(error, null, 2)
-        );
-        setMessage(
-          `Error ${error.code}: ${error.message}`
-        );
-        return;
+        if (error) {
+          setMessage(error.message);
+        } else if (!data.session) {
+          setMessage(
+            "Cuenta creada. Revisa tu correo para confirmar el registro antes de iniciar sesión."
+          );
+        }
       }
-
-      setMessage("Espacio creado correctamente.");
-    } catch (error) {
-      console.error("Error inesperado:", error);
-      setMessage("Se ha producido un error inesperado.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function signOut() {
-    setLoading(true);
-
-    try {
-      const { error } = await supabase.auth.signOut();
-
-      setUserId(null);
-      setMessage(
-        error ? `Error al cerrar sesión: ${error.message}` : "Sesión cerrada."
-      );
+    } catch {
+      setMessage("No se ha podido conectar. Comprueba tu conexión e inténtalo de nuevo.");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="mx-auto max-w-md space-y-4 p-6">
-      <h1 className="text-2xl font-bold">Swippy Meal</h1>
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#faf9f6] px-5 py-10 text-[#24251f]">
+      <div className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-orange-200/40 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-28 -right-20 h-80 w-80 rounded-full bg-lime-200/40 blur-3xl" />
 
-      <p>Accede a tu cuenta para preparar vuestro menú.</p>
+      <div className="relative grid w-full max-w-5xl overflow-hidden rounded-[2rem] border border-black/[0.06] bg-white shadow-[0_24px_90px_-35px_rgba(38,38,25,0.25)] md:grid-cols-2">
+        <section className="flex flex-col justify-between bg-[#24382d] p-8 text-white sm:p-12 md:min-h-[620px]">
+          <div>
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#d8f078] text-xl text-[#24382d]">
+                <span aria-hidden="true">✳</span>
+              </div>
+              <span className="text-lg font-semibold tracking-tight">
+                swippy meal
+              </span>
+            </div>
 
-      <label className="block">
-        Correo electrónico
-        <input
-          className="mt-1 w-full rounded border p-2"
-          type="email"
-          autoComplete="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-      </label>
+            <div className="mt-16 max-w-sm md:mt-24">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#d8f078]">
+                Menos dudas. Más sabor.
+              </p>
+              <h1 className="mt-5 text-4xl font-semibold leading-[1.12] tracking-tight sm:text-5xl">
+                ¿Qué comemos
+                <span className="block text-[#d8f078]">hoy?</span>
+              </h1>
+              <p className="mt-6 max-w-xs text-sm leading-7 text-white/70 sm:text-base">
+                Descubre platos, elegid vuestros favoritos y organizad vuestro
+                menú semanal en un solo lugar.
+              </p>
+            </div>
+          </div>
 
-      <label className="block">
-        Contraseña
-        <input
-          className="mt-1 w-full rounded border p-2"
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-      </label>
-
-      <button
-        className="w-full rounded bg-black p-3 text-white disabled:opacity-50"
-        disabled={loading || !email || password.length < 6}
-        onClick={signIn}
-      >
-        Iniciar sesión
-      </button>
-
-      <button
-        className="w-full rounded border p-3 disabled:opacity-50"
-        disabled={loading || !email || password.length < 6}
-        onClick={signUp}
-      >
-        Crear cuenta
-      </button>
-
-      {userId && (
-        <section className="space-y-2 rounded border p-3">
-          <p className="break-all text-sm">
-            Usuario: {userId}
-          </p>
-
-          <button
-            className="w-full rounded border p-2 disabled:opacity-50"
-            disabled={loading}
-            onClick={createHousehold}
-          >
-            Crear nuestro espacio compartido
-          </button>
-
-          <button
-            className="w-full rounded border p-2 disabled:opacity-50"
-            disabled={loading}
-            onClick={refreshUser}
-          >
-            Comprobar sesión
-          </button>
-
-          <button
-            className="w-full rounded border p-2 disabled:opacity-50"
-            disabled={loading}
-            onClick={signOut}
-          >
-            Cerrar sesión
-          </button>
+          <div className="mt-14 border-t border-white/15 pt-5">
+            <p className="text-sm text-white/60">
+              Hecho para disfrutar más de cada comida.
+            </p>
+          </div>
         </section>
-      )}
 
-      {message && (
-        <p role="status" className="break-words text-sm">
-          {message}
-        </p>
-      )}
+        <section className="flex flex-col justify-center p-7 sm:p-12 md:p-14">
+          <div className="mb-8">
+            <p className="text-sm font-medium text-[#78836c]">
+              Tu cocina empieza aquí
+            </p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-tight">
+              {mode === "login" ? "Qué bueno verte." : "Crea tu cuenta."}
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-gray-500">
+              {mode === "login"
+                ? "Entra y sigue organizando tus comidas."
+                : "Regístrate para empezar a organizar tus menús."}
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-gray-700">
+                Correo electrónico
+              </span>
+              <input
+                className="w-full rounded-xl border border-gray-200 bg-[#fcfcfb] px-4 py-3.5 text-base outline-none transition placeholder:text-gray-400 focus:border-[#657b56] focus:ring-4 focus:ring-[#657b56]/10"
+                type="email"
+                autoComplete="email"
+                placeholder="tu@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </label>
+
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-gray-700">
+                Contraseña
+              </span>
+              <input
+                className="w-full rounded-xl border border-gray-200 bg-[#fcfcfb] px-4 py-3.5 text-base outline-none transition placeholder:text-gray-400 focus:border-[#657b56] focus:ring-4 focus:ring-[#657b56]/10"
+                type="password"
+                autoComplete={
+                  mode === "login" ? "current-password" : "new-password"
+                }
+                placeholder="Mínimo 6 caracteres"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                minLength={6}
+                required
+              />
+            </label>
+
+            <button
+              type="submit"
+              disabled={loading || !email.trim() || password.length < 6}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#293d30] px-5 py-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#3a5140] focus:outline-none focus:ring-4 focus:ring-[#657b56]/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading
+                ? "Un momento..."
+                : mode === "login"
+                  ? "Iniciar sesión"
+                  : "Crear cuenta"}
+              {!loading && <span aria-hidden="true">→</span>}
+            </button>
+          </form>
+
+          {message && (
+            <p
+              role="status"
+              aria-live="polite"
+              className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm leading-6 text-gray-700"
+            >
+              {message}
+            </p>
+          )}
+
+          <div className="mt-7 border-t border-gray-100 pt-6 text-center">
+            <p className="text-sm text-gray-500">
+              {mode === "login"
+                ? "¿Todavía no tienes cuenta?"
+                : "¿Ya tienes una cuenta?"}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setMode(mode === "login" ? "signup" : "login");
+                setMessage("");
+              }}
+              className="mt-2 text-sm font-semibold text-[#496348] underline decoration-[#496348]/30 underline-offset-4 transition hover:text-[#24382d]"
+            >
+              {mode === "login"
+                ? "Regístrate gratis"
+                : "Volver al inicio de sesión"}
+            </button>
+          </div>
+        </section>
+      </div>
     </main>
   );
 }
