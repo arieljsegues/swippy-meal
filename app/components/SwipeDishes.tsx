@@ -23,6 +23,7 @@ const SWIPE_THRESHOLD = 110;
 const EXIT_DISTANCE = 700;
 
 export default function SwipeDishes() {
+    
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [index, setIndex] = useState(0);
   const [loading, setLoading] = useState(true);

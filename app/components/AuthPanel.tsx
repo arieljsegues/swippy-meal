@@ -26,7 +26,7 @@ export default function AuthPanel() {
         if (error) {
           setMessage(
             error.message === "Invalid login credentials"
-              ? "El correo o la contraseña no son correctos."
+              ? "Correo o contraseña incorrectos."
               : error.message
           );
         }
@@ -39,79 +39,49 @@ export default function AuthPanel() {
         if (error) {
           setMessage(error.message);
         } else if (!data.session) {
-          setMessage(
-            "Cuenta creada. Revisa tu correo para confirmar el registro antes de iniciar sesión."
-          );
+          setMessage("Revisa tu correo para confirmar tu cuenta.");
+        } else {
+          setMessage("Cuenta creada correctamente.");
         }
       }
     } catch {
-      setMessage("No se ha podido conectar. Comprueba tu conexión e inténtalo de nuevo.");
+      setMessage("Error de conexión. Inténtalo de nuevo.");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#faf9f6] px-5 py-10 text-[#24251f]">
-      <div className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-orange-200/40 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-28 -right-20 h-80 w-80 rounded-full bg-lime-200/40 blur-3xl" />
-
-      <div className="relative grid w-full max-w-5xl overflow-hidden rounded-[2rem] border border-black/[0.06] bg-white shadow-[0_24px_90px_-35px_rgba(38,38,25,0.25)] md:grid-cols-2">
-        <section className="flex flex-col justify-between bg-[#24382d] p-8 text-white sm:p-12 md:min-h-[620px]">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#d8f078] text-xl text-[#24382d]">
-                <span aria-hidden="true">✳</span>
-              </div>
-              <span className="text-lg font-semibold tracking-tight">
-                swippy meal
-              </span>
-            </div>
-
-            <div className="mt-16 max-w-sm md:mt-24">
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#d8f078]">
-                Menos dudas. Más sabor.
-              </p>
-              <h1 className="mt-5 text-4xl font-semibold leading-[1.12] tracking-tight sm:text-5xl">
-                ¿Qué comemos
-                <span className="block text-[#d8f078]">hoy?</span>
-              </h1>
-              <p className="mt-6 max-w-xs text-sm leading-7 text-white/70 sm:text-base">
-                Descubre platos, elegid vuestros favoritos y organizad vuestro
-                menú semanal en un solo lugar.
-              </p>
-            </div>
+    <main className="flex min-h-dvh items-center justify-center bg-[#f7f7f5] px-5 py-4 text-[#252720]">
+      <section className="w-full max-w-[360px]">
+        <header className="mb-8 text-center">
+          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[#293b2e] text-xl text-white">
+            ✳
           </div>
 
-          <div className="mt-14 border-t border-white/15 pt-5">
-            <p className="text-sm text-white/60">
-              Hecho para disfrutar más de cada comida.
-            </p>
-          </div>
-        </section>
+          <p className="text-sm font-semibold tracking-tight">
+            swippy meal
+          </p>
+        </header>
 
-        <section className="flex flex-col justify-center p-7 sm:p-12 md:p-14">
-          <div className="mb-8">
-            <p className="text-sm font-medium text-[#78836c]">
-              Tu cocina empieza aquí
-            </p>
-            <h2 className="mt-2 text-3xl font-semibold tracking-tight">
-              {mode === "login" ? "Qué bueno verte." : "Crea tu cuenta."}
-            </h2>
-            <p className="mt-3 text-sm leading-6 text-gray-500">
-              {mode === "login"
-                ? "Entra y sigue organizando tus comidas."
-                : "Regístrate para empezar a organizar tus menús."}
-            </p>
-          </div>
+        <div className="rounded-2xl border border-black/[0.07] bg-white p-5 shadow-sm sm:p-7">
+          <h1 className="text-xl font-semibold tracking-tight">
+            {mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
+          </h1>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <p className="mt-1 text-sm text-gray-500">
+            {mode === "login"
+              ? "Accede a tu cuenta."
+              : "Empieza a organizar tus comidas."}
+          </p>
+
+          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             <label className="block">
-              <span className="mb-2 block text-sm font-medium text-gray-700">
+              <span className="mb-1.5 block text-xs font-medium text-gray-600">
                 Correo electrónico
               </span>
               <input
-                className="w-full rounded-xl border border-gray-200 bg-[#fcfcfb] px-4 py-3.5 text-base outline-none transition placeholder:text-gray-400 focus:border-[#657b56] focus:ring-4 focus:ring-[#657b56]/10"
+                className="h-11 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none transition placeholder:text-gray-400 focus:border-[#526b52] focus:ring-2 focus:ring-[#526b52]/10"
                 type="email"
                 autoComplete="email"
                 placeholder="tu@email.com"
@@ -122,11 +92,11 @@ export default function AuthPanel() {
             </label>
 
             <label className="block">
-              <span className="mb-2 block text-sm font-medium text-gray-700">
+              <span className="mb-1.5 block text-xs font-medium text-gray-600">
                 Contraseña
               </span>
               <input
-                className="w-full rounded-xl border border-gray-200 bg-[#fcfcfb] px-4 py-3.5 text-base outline-none transition placeholder:text-gray-400 focus:border-[#657b56] focus:ring-4 focus:ring-[#657b56]/10"
+                className="h-11 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none transition placeholder:text-gray-400 focus:border-[#526b52] focus:ring-2 focus:ring-[#526b52]/10"
                 type="password"
                 autoComplete={
                   mode === "login" ? "current-password" : "new-password"
@@ -142,14 +112,13 @@ export default function AuthPanel() {
             <button
               type="submit"
               disabled={loading || !email.trim() || password.length < 6}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#293d30] px-5 py-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#3a5140] focus:outline-none focus:ring-4 focus:ring-[#657b56]/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex h-11 w-full items-center justify-center rounded-lg bg-[#293b2e] px-4 text-sm font-medium text-white transition hover:bg-[#3b5040] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading
-                ? "Un momento..."
+                ? "Cargando..."
                 : mode === "login"
-                  ? "Iniciar sesión"
+                  ? "Entrar"
                   : "Crear cuenta"}
-              {!loading && <span aria-hidden="true">→</span>}
             </button>
           </form>
 
@@ -157,33 +126,32 @@ export default function AuthPanel() {
             <p
               role="status"
               aria-live="polite"
-              className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm leading-6 text-gray-700"
+              className="mt-4 rounded-lg bg-gray-50 p-3 text-xs leading-5 text-gray-600"
             >
               {message}
             </p>
           )}
 
-          <div className="mt-7 border-t border-gray-100 pt-6 text-center">
-            <p className="text-sm text-gray-500">
-              {mode === "login"
-                ? "¿Todavía no tienes cuenta?"
-                : "¿Ya tienes una cuenta?"}
-            </p>
+          <div className="mt-5 border-t border-gray-100 pt-4 text-center">
             <button
               type="button"
               onClick={() => {
                 setMode(mode === "login" ? "signup" : "login");
                 setMessage("");
               }}
-              className="mt-2 text-sm font-semibold text-[#496348] underline decoration-[#496348]/30 underline-offset-4 transition hover:text-[#24382d]"
+              className="text-xs font-medium text-[#405b43] hover:underline"
             >
               {mode === "login"
-                ? "Regístrate gratis"
-                : "Volver al inicio de sesión"}
+                ? "Crear una cuenta"
+                : "Ya tengo una cuenta"}
             </button>
           </div>
-        </section>
-      </div>
+        </div>
+
+        <p className="mt-5 text-center text-[11px] text-gray-400">
+          Tu menú, más sencillo.
+        </p>
+      </section>
     </main>
   );
 }
