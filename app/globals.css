@@ -24,3 +24,24 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes meal-wiggle {
+  0%, 100% {
+    rotate: -0.6deg;
+  }
+  50% {
+    rotate: 0.6deg;
+  }
+}
+
+.selected-meal {
+  animation: meal-wiggle 0.8s ease-in-out infinite;
+  outline: 2px solid #93c5fd;
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .selected-meal {
+    animation: none;
+  }
+}
