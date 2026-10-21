@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "export",
-  basePath: "/tinder-meal",
+  basePath: "/swippy-meal",
   trailingSlash: true,
   images: {
     unoptimized: true,
