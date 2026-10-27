@@ -212,6 +212,7 @@ const goToCurrentWeek = useCallback(() => {
 
   const getRangeDates = useCallback(() => {
     const dates: Date[] = [];
+    
 
     if (
       !isValidDateKey(weekStart) ||
@@ -325,6 +326,13 @@ const goToCurrentWeek = useCallback(() => {
     void loadMenu();
   }, [loadMenu]);
 
+  const todayRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!loading) {
+      todayRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [loading, weekStart]);
   useEffect(() => {
     let active = true;
 
@@ -747,6 +755,8 @@ const goToCurrentWeek = useCallback(() => {
 
   const dates = getRangeDates();
 
+  const todayKey = dateToKey(new Date());
+
   const dateLabel = formatWeekRange(weekStart, weekEnd);
 
   const filteredDishes = availableDishes.filter((dish) =>
@@ -754,25 +764,7 @@ const goToCurrentWeek = useCallback(() => {
   );
 
   return (
-    <main className="mx-auto flex h-[100dvh] w-full max-w-7xl flex-col gap-3 overflow-hidden bg-[#fafaf9] p-3 text-[#292524] sm:p-6">
-      <header className="flex shrink-0 items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-            Nuestro menú
-          </h1>
-          <p className="mt-1 text-sm text-stone-500">{dateLabel}</p>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => void loadMenu()}
-          disabled={loading || busy}
-          className="shrink-0 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-medium transition hover:bg-stone-50 disabled:opacity-50"
-        >
-          Actualizar
-        </button>
-      </header>
-
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 bg-[#fafaf9] p-3 text-[#292524] sm:p-6">
       {/* Selector semanal */}
       <section className="flex shrink-0 items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white p-3 sm:p-4">
         <button
@@ -819,39 +811,14 @@ const goToCurrentWeek = useCallback(() => {
         </button>
       </section>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-stone-600">
-        <span className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded-sm bg-[#e6f3e9]" />
-          Para 2
-        </span>
-        <span className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded-sm bg-amber-100" />
-          👤 Para 1
-        </span>
-        <span className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded-sm bg-[#f5f4f1]" />
-          Vacío
-        </span>
-        <span className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded-sm bg-[#fbe9e7]" />
-          No disponible
-        </span>
-        <span className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded-sm border-2 border-blue-500 bg-white" />
-          Seleccionado
-        </span>
-      </div>
 
       {message && (
-        <p
-          role="status"
-          className="shrink-0 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"
-        >
-          {message}
-        </p>
+      <p role="status" className="shrink-0 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {message}
+            </p>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+
         {loading ? (
           <div className="rounded-2xl border border-stone-200 bg-white p-10 text-center text-sm text-stone-500">
             Cargando menú...
@@ -864,6 +831,7 @@ const goToCurrentWeek = useCallback(() => {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
             {dates.map((date) => {
               const dateKey = dateToKey(date);
+              const isToday = dateKey === todayKey;
 
               const dayName = date.toLocaleDateString("es-ES", {
                 weekday: "long",
@@ -885,21 +853,35 @@ const goToCurrentWeek = useCallback(() => {
               return (
                 <section
                   key={dateKey}
-                  className="min-w-0 space-y-2 rounded-2xl border border-stone-200 bg-white p-2.5"
+                  className={`min-w-0 space-y-2 rounded-2xl border p-2.5 ${
+                    isToday
+                      ? "border-[#293d30] bg-[#f3f7f4] ring-2 ring-[#293d30]/20"
+                      : "border-stone-200 bg-white"
+                  }`}
+                  ref={isToday ? todayRef : undefined}
                 >
-                  <header className="flex min-h-[54px] items-center justify-between gap-1 border-b border-stone-100 px-1 pb-2">
+                  <header
+                    className={`flex min-h-[54px] items-center justify-between gap-1 border-b px-1 pb-2 ${
+                      isToday ? "border-[#293d30]/20" : "border-stone-100"
+                    }`}
+                  >
                     <div className="min-w-0">
                       <h2 className="truncate text-sm font-semibold capitalize text-stone-800">
                         {dayName}
                       </h2>
-                      <p className="mt-0.5 text-xs text-stone-500">
-                        {formattedDate}
-                      </p>
+                      <p className="mt-0.5 text-xs text-stone-500">{formattedDate}</p>
                     </div>
 
-                    <span className="shrink-0 rounded-md bg-stone-100 px-1.5 py-1 text-[10px] font-medium text-stone-500">
-                      {filledCount}/2
-                    </span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {isToday && (
+                        <span className="rounded-md bg-[#293d30] px-1.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white">
+                          Hoy
+                        </span>
+                      )}
+                      <span className="rounded-md bg-stone-100 px-1.5 py-1 text-[10px] font-medium text-stone-500">
+                        {filledCount}/2
+                      </span>
+                    </div>
                   </header>
 
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-1">
@@ -1084,7 +1066,6 @@ const goToCurrentWeek = useCallback(() => {
             })}
           </div>
         )}
-      </div>
 
       {pickerTarget && (
         <div
@@ -1171,6 +1152,6 @@ const goToCurrentWeek = useCallback(() => {
           </section>
         </div>
       )}
-    </main>
+    </div>
   );
 }

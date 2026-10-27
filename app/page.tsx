@@ -110,16 +110,20 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#faf9f6] pb-24">
-      <header className="flex justify-end border-b border-black/5 bg-white/80 p-3">
+     <div className="flex h-[100dvh] flex-col overflow-hidden bg-[#faf9f6]">
+      <header className="relative z-20 flex shrink-0 items-center justify-end rounded-b-2xl bg-beige-600 px-3 py-1 shadow-sm">
         <LogoutButton />
       </header>
+    <main className="min-h-0 flex-1 overflow-y-auto">
+      
 
       {section === "swipe" && <SwipeDishes />}
       {section === "menu" && <WeeklyMenu />}
       {section === "add" && <AddDish />}
 
-      <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-black/10 bg-white/95 p-3 backdrop-blur">
+      
+    </main>
+    <nav className="shrink-0 border-t border-black/10 bg-white/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
         <div className="mx-auto flex max-w-2xl justify-around gap-2">
           <button
             type="button"
@@ -161,6 +165,6 @@ export default function Home() {
           </button>
         </div>
       </nav>
-    </main>
+    </div>
   );
 }
