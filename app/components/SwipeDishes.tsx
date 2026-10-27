@@ -347,7 +347,7 @@ export default function SwipeDishes() {
   const rotation = dragX * 0.045;
 
   return (
-    <main className="mx-auto flex min-h-0 w-full max-w-lg flex-col gap-3 overflow-x-hidden px-3 pt-3 pb-28 sm:px-4">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-lg flex-col gap-3 overflow-hidden px-3 py-3 sm:px-4">
       <header className="flex shrink-0 items-center justify-center border-b border-gray-100 pb-3">
         <h1 className="text-3xl font-extrabold tracking-tight text-rose-500">
           Swippy Meal
@@ -480,6 +480,6 @@ export default function SwipeDishes() {
           Guardando en la semana del {formatDisplayDate(weekStart)}…
         </p>
       )}
-    </main>
+    </div>
   );
 }
