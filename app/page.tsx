@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -8,11 +7,10 @@ import SwipeDishes from "./components/SwipeDishes";
 import WeeklyMenu from "./components/WeeklyMenu";
 import AddDish from "./components/AddDish";
 import LogoutButton from "./components/LogoutButton";
-
-type Section = "swipe" | "menu" | "add";
+import Nav, { type Section } from "./components/Nav";
 
 export default function Home() {
-  const [section, setSection] = useState<Section>("swipe");
+  const [section, setSection] = useState<Section>("menu");
   const [checkingSession, setCheckingSession] = useState(true);
   const [loggedIn, setLoggedIn] = useState(false);
   const [sessionError, setSessionError] = useState(false);
@@ -94,6 +92,7 @@ export default function Home() {
         <p className="max-w-md text-center text-gray-700">
           No se ha podido comprobar la sesión. Comprueba tu conexión e inténtalo de nuevo.
         </p>
+
         <button
           type="button"
           onClick={() => window.location.reload()}
@@ -110,61 +109,18 @@ export default function Home() {
   }
 
   return (
-     <div className="flex h-[100dvh] flex-col overflow-hidden bg-[#faf9f6]">
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-[#faf9f6]">
       <header className="relative z-20 flex shrink-0 items-center justify-end rounded-b-2xl bg-beige-600 px-3 py-1 shadow-sm">
         <LogoutButton />
       </header>
-    <main className="min-h-0 flex-1 overflow-y-auto">
-      
 
-      {section === "swipe" && <SwipeDishes />}
-      {section === "menu" && <WeeklyMenu />}
-      {section === "add" && <AddDish />}
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        {section === "menu" && <WeeklyMenu />}
+        {section === "swipe" && <SwipeDishes />}
+        {section === "add" && <AddDish />}
+      </main>
 
-      
-    </main>
-    <nav className="shrink-0 border-t border-black/10 bg-white/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
-        <div className="mx-auto flex max-w-2xl justify-around gap-2">
-          <button
-            type="button"
-            aria-current={section === "swipe" ? "page" : undefined}
-            onClick={() => setSection("swipe")}
-            className={`rounded-xl px-4 py-3 text-sm font-medium transition ${
-              section === "swipe"
-                ? "bg-pink-100 text-pink-800"
-                : "text-gray-600 hover:bg-gray-100"
-            }`}
-          >
-            Elegir
-          </button>
-
-          <button
-            type="button"
-            aria-current={section === "menu" ? "page" : undefined}
-            onClick={() => setSection("menu")}
-            className={`rounded-xl px-4 py-3 text-sm font-medium transition ${
-              section === "menu"
-                ? "bg-blue-100 text-blue-800"
-                : "text-gray-600 hover:bg-gray-100"
-            }`}
-          >
-            Menú semanal
-          </button>
-
-          <button
-            type="button"
-            aria-current={section === "add" ? "page" : undefined}
-            onClick={() => setSection("add")}
-            className={`rounded-xl px-4 py-3 text-sm font-medium transition ${
-              section === "add"
-                ? "bg-green-100 text-green-800"
-                : "text-gray-600 hover:bg-gray-100"
-            }`}
-          >
-            Platos
-          </button>
-        </div>
-      </nav>
+      <Nav section={section} setSection={setSection} />
     </div>
   );
 }

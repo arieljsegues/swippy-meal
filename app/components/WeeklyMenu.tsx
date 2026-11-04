@@ -24,6 +24,8 @@ type Slot = {
   dish_id: string | null;
   special_label: string | null;
   is_for_one: boolean;
+  needs_defrost: boolean;
+  needs_shopping: boolean;
   dishes: { name: string } | null;
   date_key: string;
 };
@@ -270,7 +272,7 @@ const goToCurrentWeek = useCallback(() => {
       const { data: rowsWithMenu, error: relationError } = await supabase
         .from("meal_slots")
         .select(
-          "id, menu_id, day_of_week, meal_type, dish_id, special_label, is_for_one, dishes(name)"
+          "id, menu_id, day_of_week, meal_type, dish_id, special_label, is_for_one, needs_defrost, needs_shopping, dishes(name)"
         )
         .in(
           "menu_id",
@@ -301,6 +303,8 @@ const goToCurrentWeek = useCallback(() => {
           dish_id: row.dish_id,
           special_label: row.special_label,
           is_for_one: row.is_for_one ?? false,
+          needs_defrost: row.needs_defrost ?? false,
+          needs_shopping: row.needs_shopping ?? false,
           dishes: row.dishes,
           date_key: dateToKey(
             addDays(keyToDate(menuWeekStart), row.day_of_week)
@@ -438,7 +442,7 @@ const goToCurrentWeek = useCallback(() => {
           is_for_one: false,
         })
         .select(
-          "id, day_of_week, meal_type, dish_id, special_label, is_for_one, dishes(name)"
+          "id, day_of_week, meal_type, dish_id, special_label, is_for_one, needs_defrost, needs_shopping, dishes(name)"
         )
         .single();
 
@@ -449,6 +453,8 @@ const goToCurrentWeek = useCallback(() => {
         {
           ...(data as unknown as Slot),
           is_for_one: false,
+          needs_defrost: false,
+          needs_shopping: false,
           date_key: dateKey,
         },
       ]);
@@ -527,6 +533,45 @@ const goToCurrentWeek = useCallback(() => {
     }
   }
 
+  async function toggleMealFlag(
+    slot: Slot,
+    flag: "needs_defrost" | "needs_shopping"
+  ) {
+    if (busy || !slot.dish_id || isBlocked(slot)) return;
+
+    const nextValue = !slot[flag];
+    const updateValues =
+      flag === "needs_defrost"
+        ? { needs_defrost: nextValue }
+        : { needs_shopping: nextValue };
+
+    setBusy(true);
+    setMessage("");
+
+    try {
+      const { error } = await supabase
+        .from("meal_slots")
+        .update(updateValues)
+        .eq("id", slot.id);
+
+      if (error) throw error;
+
+      setSlots((current) =>
+        current.map((item) =>
+          item.id === slot.id ? { ...item, [flag]: nextValue } : item
+        )
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `No se pudo actualizar: ${error.message}`
+          : "No se pudo actualizar el estado."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function selectForSwap(
     target: Slot | undefined,
     targetDate: string,
@@ -569,6 +614,8 @@ const goToCurrentWeek = useCallback(() => {
               dish_id: source.dish_id,
               special_label: source.special_label,
               is_for_one: source.is_for_one,
+              needs_defrost: source.needs_defrost,
+              needs_shopping: source.needs_shopping,
             })
             .eq("id", target.id);
 
@@ -581,6 +628,8 @@ const goToCurrentWeek = useCallback(() => {
             dish_id: source.dish_id,
             special_label: source.special_label,
             is_for_one: source.is_for_one,
+            needs_defrost: source.needs_defrost,
+            needs_shopping: source.needs_shopping,
           });
 
           if (error) throw error;
@@ -604,12 +653,16 @@ const goToCurrentWeek = useCallback(() => {
         dish_id: source.dish_id,
         special_label: source.special_label,
         is_for_one: source.is_for_one,
+        needs_defrost: source.needs_defrost,
+        needs_shopping: source.needs_shopping,
       };
 
       const targetValues = {
         dish_id: target.dish_id,
         special_label: target.special_label,
         is_for_one: target.is_for_one,
+        needs_defrost: target.needs_defrost,
+        needs_shopping: target.needs_shopping,
       };
 
       const { error: firstError } = await supabase
@@ -720,6 +773,8 @@ const goToCurrentWeek = useCallback(() => {
             dish_id: dish.id,
             special_label: null,
             is_for_one: false,
+            needs_defrost: false,
+            needs_shopping: false,
           })
           .eq("id", existing.id);
 
@@ -734,6 +789,8 @@ const goToCurrentWeek = useCallback(() => {
           dish_id: dish.id,
           special_label: null,
           is_for_one: false,
+          needs_defrost: false,
+          needs_shopping: false,
         });
 
         if (error) throw error;
@@ -924,8 +981,8 @@ const goToCurrentWeek = useCallback(() => {
                           }
                           onPointerCancel={handlePointerCancel}
                           className={`relative flex min-h-[142px] min-w-0 flex-col rounded-xl border p-2 pt-9 sm:p-3 sm:pt-9 ${slotStyle} ${
-                            slot && !blocked ? "cursor-pointer" : ""
-                          }`}
+                            slot?.needs_shopping ? "!border-red-500" : ""
+                          } ${slot && !blocked ? "cursor-pointer" : ""}`}
                           style={{ touchAction: "pan-y" }}
                         >
                           {slot?.dish_id && !blocked && (
@@ -975,6 +1032,52 @@ const goToCurrentWeek = useCallback(() => {
                           >
                             {dishName}
                           </p>
+
+                          {slot?.dish_id && !blocked && (
+                            <div className="mt-3 flex items-center gap-2">
+                              <button
+                                type="button"
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onPointerUp={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void toggleMealFlag(slot, "needs_defrost");
+                                }}
+                                disabled={busy}
+                                aria-label="Marcar si necesita descongelarse"
+                                aria-pressed={slot.needs_defrost}
+                                title="Necesita descongelarse"
+                                className={`flex h-10 flex-1 items-center justify-center rounded-lg border text-lg transition disabled:opacity-50 ${
+                                  slot.needs_defrost
+                                    ? "border-blue-500 bg-blue-100 text-blue-700"
+                                    : "border-stone-200 bg-white text-stone-400 hover:bg-blue-50"
+                                }`}
+                              >
+                                🧊
+                              </button>
+
+                              <button
+                                type="button"
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onPointerUp={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void toggleMealFlag(slot, "needs_shopping");
+                                }}
+                                disabled={busy}
+                                aria-label="Marcar si necesita compra"
+                                aria-pressed={slot.needs_shopping}
+                                title="Necesita compra"
+                                className={`flex h-10 flex-1 items-center justify-center rounded-lg border text-lg font-semibold transition disabled:opacity-50 ${
+                                  slot.needs_shopping
+                                    ? "border-red-500 bg-red-100 text-red-700"
+                                    : "border-stone-200 bg-white text-stone-400 hover:bg-red-50"
+                                }`}
+                              >
+                                $
+                              </button>
+                            </div>
+                          )}
 
                           {slot?.is_for_one && (
                             <span className="mt-1 text-xs font-semibold text-amber-800">
