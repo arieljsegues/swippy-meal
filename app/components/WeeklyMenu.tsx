@@ -1,44 +1,68 @@
-
 "use client";
 
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
+  type FormEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import { supabase } from "@/lib/supabase/client";
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Constants & types                                                          */
+/* ────────────────────────────────────────────────────────────────────────── */
 
 const HOUSEHOLD_ID = "f6182e7d-ae8e-418c-b828-4ac925a51781";
 const BLOCKED_LABEL = "NO_DISPONIBLE";
 const LONG_PRESS_MS = 400;
 const MOVE_CANCEL_PX = 10;
 
+const SLOT_SELECT =
+  "id, day_of_week, meal_type, dish_id, special_label, is_for_one, needs_defrost, needs_shopping, note, dishes(name)";
+
 type MealType = "lunch" | "dinner";
 
-type Slot = {
-  id: string;
-  day_of_week: number;
-  meal_type: MealType;
+const MEALS = [
+  { label: "Comida", type: "lunch" },
+  { label: "Cena", type: "dinner" },
+] as const;
+
+type SlotValues = {
   dish_id: string | null;
   special_label: string | null;
   is_for_one: boolean;
   needs_defrost: boolean;
   needs_shopping: boolean;
+  note: string | null;
+};
+
+type Slot = SlotValues & {
+  id: string;
+  day_of_week: number;
+  meal_type: MealType;
   dishes: { name: string } | null;
   date_key: string;
 };
 
-type WeeklyMenuRecord = {
-  id: string;
-  week_start: string;
+type SlotRow = Omit<Slot, "date_key" | "is_for_one" | "needs_defrost" | "needs_shopping" | "note"> & {
+  is_for_one: boolean | null;
+  needs_defrost: boolean | null;
+  needs_shopping: boolean | null;
+  note: string | null;
 };
 
-type Dish = {
-  id: string;
-  name: string;
-};
+type Dish = { id: string; name: string };
+type MenuNote = { id: string; text: string; done: boolean };
+type Target = { dateKey: string; mealType: MealType };
+type Toast = { id: number; text: string; tone: "error" | "info" };
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Date & text helpers                                                        */
+/* ────────────────────────────────────────────────────────────────────────── */
 
 function dateToKey(date: Date) {
   return [
@@ -69,13 +93,10 @@ function getWeekday(date: Date) {
   return (date.getDay() + 6) % 7;
 }
 
-function getInitialRange() {
-  const monday = getMonday(new Date());
-
-  return {
-    start: dateToKey(monday),
-    end: dateToKey(addDays(monday, 6)),
-  };
+function isValidDateKey(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = keyToDate(value);
+  return !Number.isNaN(date.getTime()) && dateToKey(date) === value;
 }
 
 function normalizeSearch(value: string) {
@@ -86,77 +107,126 @@ function normalizeSearch(value: string) {
     .toLowerCase();
 }
 
-function isValidDateKey(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-
-  const date = keyToDate(value);
-
-  return !Number.isNaN(date.getTime()) && dateToKey(date) === value;
-}
-
 function formatWeekRange(start: string, end: string) {
-  const startDate = keyToDate(start);
-  const endDate = keyToDate(end);
-
+  const s = keyToDate(start);
+  const e = keyToDate(end);
   const sameMonth =
-    startDate.getMonth() === endDate.getMonth() &&
-    startDate.getFullYear() === endDate.getFullYear();
+    s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear();
 
   if (sameMonth) {
-    return `${startDate.getDate()} – ${endDate.toLocaleDateString("es-ES", {
+    return `${s.getDate()} – ${e.toLocaleDateString("es-ES", {
       day: "numeric",
       month: "long",
       year: "numeric",
     })}`;
   }
 
-  return `${startDate.toLocaleDateString("es-ES", {
+  return `${s.toLocaleDateString("es-ES", {
     day: "numeric",
     month: "short",
-  })} – ${endDate.toLocaleDateString("es-ES", {
+  })} – ${e.toLocaleDateString("es-ES", {
     day: "numeric",
     month: "short",
     year: "numeric",
   })}`;
 }
 
+function errorMessage(error: unknown) {
+  if (error && typeof error === "object" && "message" in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return "";
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Slot helpers                                                               */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+const isBlocked = (slot?: Slot) => slot?.special_label === BLOCKED_LABEL;
+const canSwap = (slot?: Slot) => Boolean(slot && slot.dish_id && !isBlocked(slot));
+
+function toSlot(raw: unknown, weekStart: string): Slot {
+  const row = raw as SlotRow;
+  return {
+    id: row.id,
+    day_of_week: row.day_of_week,
+    meal_type: row.meal_type,
+    dish_id: row.dish_id,
+    special_label: row.special_label,
+    is_for_one: row.is_for_one ?? false,
+    needs_defrost: row.needs_defrost ?? false,
+    needs_shopping: row.needs_shopping ?? false,
+    note: row.note ?? null,
+    dishes: row.dishes,
+    date_key: dateToKey(addDays(keyToDate(weekStart), row.day_of_week)),
+  };
+}
+
+function pickValues(slot: Slot): SlotValues {
+  return {
+    dish_id: slot.dish_id,
+    special_label: slot.special_label,
+    is_for_one: slot.is_for_one,
+    needs_defrost: slot.needs_defrost,
+    needs_shopping: slot.needs_shopping,
+    note: slot.note,
+  };
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Main component                                                             */
+/* ────────────────────────────────────────────────────────────────────────── */
+
 export default function WeeklyMenu() {
-  const initialRange = getInitialRange();
+  const [weekStart, setWeekStart] = useState(() =>
+    dateToKey(getMonday(new Date()))
+  );
+  const [ready, setReady] = useState(false);
 
-  const [weekStart, setWeekStart] = useState(initialRange.start);
-  const [rangeInitialized, setRangeInitialized] = useState(false);
-
-  const [availableDishes, setAvailableDishes] = useState<Dish[]>([]);
-  const [dishSearch, setDishSearch] = useState("");
-
-  const [pickerTarget, setPickerTarget] = useState<{
-    dateKey: string;
-    mealType: MealType;
-  } | null>(null);
-
+  const [menuId, setMenuId] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[]>([]);
+  const [notes, setNotes] = useState<MenuNote[]>([]);
+  const [dishes, setDishes] = useState<Dish[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
 
-  const longPressTimer = useRef<number | null>(null);
-  const longPressTriggered = useRef(false);
-  const pointerStart = useRef<{ x: number; y: number } | null>(null);
+  const [swapSource, setSwapSource] = useState<string | null>(null);
+  const [picker, setPicker] = useState<Target | null>(null);
+  const [sheetSlotId, setSheetSlotId] = useState<string | null>(null);
+
+  const requestId = useRef(0);
+  const todayRef = useRef<HTMLElement | null>(null);
 
   const weekEnd = dateToKey(addDays(keyToDate(weekStart), 6));
+  const todayKey = dateToKey(new Date());
+  const isCurrentWeek = weekStart === dateToKey(getMonday(new Date()));
 
-  const cancelLongPress = useCallback(() => {
-    if (longPressTimer.current !== null) {
-      window.clearTimeout(longPressTimer.current);
-      longPressTimer.current = null;
-    }
-  }, []);
+  const dates = useMemo(
+    () =>
+      Array.from({ length: 7 }, (_, i) => addDays(keyToDate(weekStart), i)),
+    [weekStart]
+  );
+
+  const notify = useCallback(
+    (text: string, tone: Toast["tone"] = "error") =>
+      setToast({ id: Date.now(), text, tone }),
+    []
+  );
+
+  const fail = useCallback(
+    (prefix: string, error: unknown) => {
+      const detail = errorMessage(error);
+      notify(detail ? `${prefix}: ${detail}` : prefix);
+    },
+    [notify]
+  );
+
+  /* ── Week from URL ───────────────────────────────────────────────────── */
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const week = params.get("week");
-
+    const week = new URLSearchParams(window.location.search).get("week");
     if (
       week &&
       isValidDateKey(week) &&
@@ -164,183 +234,95 @@ export default function WeeklyMenu() {
     ) {
       setWeekStart(week);
     }
-
-    setRangeInitialized(true);
+    setReady(true);
   }, []);
 
-  useEffect(() => {
-    return () => cancelLongPress();
-  }, [cancelLongPress]);
+  const goToWeek = useCallback((monday: string) => {
+    setWeekStart(monday);
+    setSwapSource(null);
+    setSheetSlotId(null);
+    setToast(null);
 
-  const changeWeek = useCallback((offset: number) => {
-  const nextMonday = dateToKey(
-    addDays(keyToDate(weekStart), offset * 7)
-  );
+    const params = new URLSearchParams(window.location.search);
+    params.set("week", monday);
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}?${params.toString()}${window.location.hash}`
+    );
+  }, []);
 
-  setWeekStart(nextMonday);
-  setSelectedSlot(null);
-  setMessage("");
+  const changeWeek = (offset: number) =>
+    goToWeek(dateToKey(addDays(keyToDate(weekStart), offset * 7)));
 
-  const params = new URLSearchParams(window.location.search);
-  params.set("week", nextMonday);
+  /* ── Data loading ────────────────────────────────────────────────────── */
 
-  const query = params.toString();
+  const loadMenu = useCallback(
+    async (silent = false) => {
+      if (!ready) return;
 
-  window.history.replaceState(
-    null,
-    "",
-    `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
-  );
-}, [weekStart]);
+      const id = ++requestId.current;
+      if (!silent) setLoading(true);
 
-const goToCurrentWeek = useCallback(() => {
-  const monday = dateToKey(getMonday(new Date()));
+      try {
+        const { data: menu, error: menuError } = await supabase
+          .from("weekly_menus")
+          .select("id")
+          .eq("household_id", HOUSEHOLD_ID)
+          .eq("week_start", weekStart)
+          .maybeSingle();
 
-  setWeekStart(monday);
-  setSelectedSlot(null);
-  setMessage("");
+        if (menuError) throw menuError;
+        if (id !== requestId.current) return;
 
-  const params = new URLSearchParams(window.location.search);
-  params.set("week", monday);
-
-  const query = params.toString();
-
-  window.history.replaceState(
-    null,
-    "",
-    `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
-  );
-}, []);
-
-  const getRangeDates = useCallback(() => {
-    const dates: Date[] = [];
-    
-
-    if (
-      !isValidDateKey(weekStart) ||
-      !isValidDateKey(weekEnd) ||
-      weekStart > weekEnd
-    ) {
-      return dates;
-    }
-
-    const start = keyToDate(weekStart);
-    const end = keyToDate(weekEnd);
-
-    for (let date = start; date <= end; date = addDays(date, 1)) {
-      dates.push(new Date(date));
-    }
-
-    return dates;
-  }, [weekStart, weekEnd]);
-
-  const loadMenu = useCallback(async () => {
-    if (!rangeInitialized) return;
-
-    setLoading(true);
-    setMessage("");
-    setSelectedSlot(null);
-
-    try {
-      const dates: Date[] = [];
-      const start = keyToDate(weekStart);
-      const end = keyToDate(weekEnd);
-
-      for (let date = start; date <= end; date = addDays(date, 1)) {
-        dates.push(new Date(date));
-      }
-
-      const weekStarts = [
-        ...new Set(dates.map((date) => dateToKey(getMonday(date)))),
-      ];
-
-      const { data: menus, error: menuError } = await supabase
-        .from("weekly_menus")
-        .select("id, week_start")
-        .eq("household_id", HOUSEHOLD_ID)
-        .in("week_start", weekStarts);
-
-      if (menuError) throw menuError;
-
-      const menuRecords = (menus ?? []) as WeeklyMenuRecord[];
-
-      if (menuRecords.length === 0) {
-        setSlots([]);
-        return;
-      }
-
-      const { data: rowsWithMenu, error: relationError } = await supabase
-        .from("meal_slots")
-        .select(
-          "id, menu_id, day_of_week, meal_type, dish_id, special_label, is_for_one, needs_defrost, needs_shopping, dishes(name)"
-        )
-        .in(
-          "menu_id",
-          menuRecords.map((menu) => menu.id)
-        )
-        .order("day_of_week");
-
-      if (relationError) throw relationError;
-
-      const weekByMenuId = new Map(
-        menuRecords.map((menu) => [menu.id, menu.week_start])
-      );
-
-      const finalSlots: Slot[] = (rowsWithMenu ?? []).map((raw) => {
-        const row = raw as unknown as Slot & { menu_id: string };
-        const menuWeekStart = weekByMenuId.get(row.menu_id);
-
-        if (!menuWeekStart) {
-          throw new Error(
-            `No se encontró la semana del menú ${row.menu_id}.`
-          );
+        if (!menu) {
+          setMenuId(null);
+          setSlots([]);
+          setNotes([]);
+          return;
         }
 
-        return {
-          id: row.id,
-          day_of_week: row.day_of_week,
-          meal_type: row.meal_type,
-          dish_id: row.dish_id,
-          special_label: row.special_label,
-          is_for_one: row.is_for_one ?? false,
-          needs_defrost: row.needs_defrost ?? false,
-          needs_shopping: row.needs_shopping ?? false,
-          dishes: row.dishes,
-          date_key: dateToKey(
-            addDays(keyToDate(menuWeekStart), row.day_of_week)
-          ),
-        };
-      });
+        const [slotsRes, notesRes] = await Promise.all([
+          supabase.from("meal_slots").select(SLOT_SELECT).eq("menu_id", menu.id),
+          supabase
+            .from("menu_notes")
+            .select("id, text, done")
+            .eq("menu_id", menu.id)
+            .order("created_at"),
+        ]);
 
-      setSlots(finalSlots);
-    } catch (error) {
-      setSlots([]);
+        if (slotsRes.error) throw slotsRes.error;
+        if (id !== requestId.current) return;
 
-      setMessage(
-        error instanceof Error
-          ? `Error al cargar el menú: ${error.message}`
-          : "No se pudo cargar el menú."
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [weekStart, weekEnd, rangeInitialized]);
+        setMenuId(menu.id as string);
+        setSlots((slotsRes.data ?? []).map((row) => toSlot(row, weekStart)));
+
+        if (notesRes.error) {
+          setNotes([]);
+          fail("No se pudieron cargar las notas", notesRes.error);
+        } else {
+          setNotes((notesRes.data ?? []) as MenuNote[]);
+        }
+      } catch (error) {
+        if (id !== requestId.current) return;
+        setSlots([]);
+        setNotes([]);
+        fail("No se pudo cargar el menú", error);
+      } finally {
+        if (id === requestId.current) setLoading(false);
+      }
+    },
+    [ready, weekStart, fail]
+  );
 
   useEffect(() => {
     void loadMenu();
   }, [loadMenu]);
 
-  const todayRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (!loading) {
-      todayRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
-  }, [loading, weekStart]);
   useEffect(() => {
     let active = true;
 
-    async function loadDishes() {
+    (async () => {
       const { data, error } = await supabase
         .from("dishes")
         .select("id, name")
@@ -348,47 +330,90 @@ const goToCurrentWeek = useCallback(() => {
         .order("name");
 
       if (!active) return;
-
       if (error) {
-        console.error("Error cargando platos:", error);
-        setMessage(`No se pudieron cargar los platos: ${error.message}`);
+        fail("No se pudieron cargar los platos", error);
         return;
       }
-
-      setAvailableDishes((data ?? []) as Dish[]);
-    }
-
-    void loadDishes();
+      setDishes((data ?? []) as Dish[]);
+    })();
 
     return () => {
       active = false;
     };
-  }, []);
+  }, [fail]);
 
-  function findSlot(dateKey: string, mealType: MealType) {
-    return slots.find(
-      (slot) => slot.date_key === dateKey && slot.meal_type === mealType
-    );
+  /* ── Small effects ───────────────────────────────────────────────────── */
+
+  useEffect(() => {
+    if (!loading && isCurrentWeek) {
+      todayRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [loading, isCurrentWeek, weekStart]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    if (!swapSource) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSwapSource(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [swapSource]);
+
+  /* ── Derived data ────────────────────────────────────────────────────── */
+
+  const slotMap = useMemo(() => {
+    const map = new Map<string, Slot>();
+    for (const slot of slots) map.set(`${slot.date_key}|${slot.meal_type}`, slot);
+    return map;
+  }, [slots]);
+
+  const findSlot = useCallback(
+    (dateKey: string, mealType: MealType) =>
+      slotMap.get(`${dateKey}|${mealType}`),
+    [slotMap]
+  );
+
+  const summary = useMemo(() => {
+    const planned = slots.filter((s) => s.dish_id && !isBlocked(s));
+    const blocked = slots.filter(isBlocked).length;
+    return {
+      planned: planned.length,
+      empty: 14 - planned.length - blocked,
+      shopping: planned.filter((s) => s.needs_shopping).length,
+      defrost: planned.filter((s) => s.needs_defrost).length,
+    };
+  }, [slots]);
+
+  const sheetSlot = sheetSlotId
+    ? slots.find((s) => s.id === sheetSlotId)
+    : undefined;
+
+  /* ── Mutations ───────────────────────────────────────────────────────── */
+
+  async function run(errorText: string, fn: () => Promise<void>) {
+    setBusy(true);
+    try {
+      await fn();
+    } catch (error) {
+      fail(errorText, error);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function isBlocked(slot: Slot) {
-    return slot.special_label === BLOCKED_LABEL;
-  }
-
-  function canSwap(slot?: Slot) {
-    return Boolean(slot && slot.dish_id && !isBlocked(slot));
-  }
-
-  async function ensureMenuIdForDate(dateKey: string) {
-    const monday = dateToKey(getMonday(keyToDate(dateKey)));
+  async function ensureMenuId() {
+    if (menuId) return menuId;
 
     const { data, error } = await supabase
       .from("weekly_menus")
       .upsert(
-        {
-          household_id: HOUSEHOLD_ID,
-          week_start: monday,
-        },
+        { household_id: HOUSEHOLD_ID, week_start: weekStart },
         { onConflict: "household_id,week_start" }
       )
       .select("id")
@@ -396,434 +421,312 @@ const goToCurrentWeek = useCallback(() => {
 
     if (error) throw error;
 
+    setMenuId(data.id as string);
     return data.id as string;
   }
 
-  async function toggleBlocked(dateKey: string, mealType: MealType) {
-    if (busy) return;
+  /** Optimistic update with rollback. */
+  async function patchSlot(slotId: string, values: Partial<SlotValues>) {
+    const previous = slots.find((s) => s.id === slotId);
+    if (!previous) return;
 
-    const existing = findSlot(dateKey, mealType);
+    const rollback = Object.fromEntries(
+      Object.keys(values).map((key) => [key, previous[key as keyof Slot]])
+    );
 
-    setBusy(true);
-    setMessage("");
+    setSlots((cur) =>
+      cur.map((s) => (s.id === slotId ? { ...s, ...values } : s))
+    );
 
-    try {
+    const { error } = await supabase
+      .from("meal_slots")
+      .update(values)
+      .eq("id", slotId);
+
+    if (error) {
+      setSlots((cur) =>
+        cur.map((s) => (s.id === slotId ? { ...s, ...rollback } : s))
+      );
+      fail("No se pudo guardar el cambio", error);
+    }
+  }
+
+  async function removeSlot(slot: Slot) {
+    setSheetSlotId(null);
+    setSlots((cur) => cur.filter((s) => s.id !== slot.id));
+
+    const { error } = await supabase
+      .from("meal_slots")
+      .delete()
+      .eq("id", slot.id);
+
+    if (error) {
+      setSlots((cur) => [...cur, slot]);
+      fail("No se pudo quitar el plato", error);
+    }
+  }
+
+  async function toggleBlocked(target: Target) {
+    await run("No se pudo cambiar la disponibilidad", async () => {
+      const existing = findSlot(target.dateKey, target.mealType);
+
       if (existing && isBlocked(existing)) {
         const { error } = await supabase
           .from("meal_slots")
           .delete()
           .eq("id", existing.id);
-
         if (error) throw error;
-
-        setSlots((current) =>
-          current.filter((slot) => slot.id !== existing.id)
-        );
-
+        setSlots((cur) => cur.filter((s) => s.id !== existing.id));
         return;
       }
 
       if (existing) {
-        setMessage("Quita primero el plato para bloquear esta casilla.");
+        notify("Quita primero el plato para bloquear esta casilla.", "info");
         return;
       }
 
-      const menuId = await ensureMenuIdForDate(dateKey);
-      const date = keyToDate(dateKey);
-
+      const id = await ensureMenuId();
       const { data, error } = await supabase
         .from("meal_slots")
         .insert({
-          menu_id: menuId,
-          day_of_week: getWeekday(date),
-          meal_type: mealType,
+          menu_id: id,
+          day_of_week: getWeekday(keyToDate(target.dateKey)),
+          meal_type: target.mealType,
           dish_id: null,
           special_label: BLOCKED_LABEL,
-          is_for_one: false,
         })
-        .select(
-          "id, day_of_week, meal_type, dish_id, special_label, is_for_one, needs_defrost, needs_shopping, dishes(name)"
+        .select(SLOT_SELECT)
+        .single();
+
+      if (error) throw error;
+      setSlots((cur) => [...cur, toSlot(data, weekStart)]);
+    });
+  }
+
+  async function assignDishCore(dish: Dish, target: Target) {
+    const existing = findSlot(target.dateKey, target.mealType);
+
+    if (existing) {
+      const values: SlotValues = {
+        dish_id: dish.id,
+        special_label: null,
+        is_for_one: false,
+        needs_defrost: false,
+        needs_shopping: false,
+        note: null,
+      };
+
+      const { error } = await supabase
+        .from("meal_slots")
+        .update(values)
+        .eq("id", existing.id);
+      if (error) throw error;
+
+      setSlots((cur) =>
+        cur.map((s) =>
+          s.id === existing.id
+            ? { ...s, ...values, dishes: { name: dish.name } }
+            : s
         )
+      );
+    } else {
+      const id = await ensureMenuId();
+      const { data, error } = await supabase
+        .from("meal_slots")
+        .insert({
+          menu_id: id,
+          day_of_week: getWeekday(keyToDate(target.dateKey)),
+          meal_type: target.mealType,
+          dish_id: dish.id,
+        })
+        .select(SLOT_SELECT)
+        .single();
+
+      if (error) throw error;
+      setSlots((cur) => [...cur, toSlot(data, weekStart)]);
+    }
+
+    setPicker(null);
+  }
+
+  const assignDish = (dish: Dish, target: Target) =>
+    run("No se pudo asignar el plato", () => assignDishCore(dish, target));
+
+  const createAndAssign = (name: string, target: Target) =>
+    run("No se pudo crear el plato", async () => {
+      const clean = name.trim().replace(/\s+/g, " ");
+
+      const { data, error } = await supabase
+        .from("dishes")
+        .insert({ household_id: HOUSEHOLD_ID, name: clean })
+        .select("id, name")
         .single();
 
       if (error) throw error;
 
-      setSlots((current) => [
-        ...current,
-        {
-          ...(data as unknown as Slot),
-          is_for_one: false,
-          needs_defrost: false,
-          needs_shopping: false,
-          date_key: dateKey,
-        },
-      ]);
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? `No se pudo cambiar la disponibilidad: ${error.message}`
-          : "No se pudo cambiar la disponibilidad."
+      const dish = data as Dish;
+      setDishes((cur) =>
+        [...cur, dish].sort((a, b) => a.name.localeCompare(b.name, "es"))
       );
-    } finally {
-      setBusy(false);
-    }
-  }
+      await assignDishCore(dish, target);
+    });
 
-  async function removeSlot(slotId: string) {
-    if (busy) return;
-
-    setBusy(true);
-    setMessage("");
-
-    try {
-      const { error } = await supabase
-        .from("meal_slots")
-        .delete()
-        .eq("id", slotId);
-
-      if (error) throw error;
-
-      setSlots((current) =>
-        current.filter((slot) => slot.id !== slotId)
-      );
-
-      if (selectedSlot === slotId) setSelectedSlot(null);
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? `No se pudo quitar el plato: ${error.message}`
-          : "No se pudo quitar el plato."
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function toggleForOne(slot: Slot) {
-    if (busy || !slot.dish_id || isBlocked(slot)) return;
-
-    const nextValue = !slot.is_for_one;
-
-    setBusy(true);
-    setMessage("");
-
-    try {
-      const { error } = await supabase
-        .from("meal_slots")
-        .update({ is_for_one: nextValue })
-        .eq("id", slot.id);
-
-      if (error) throw error;
-
-      setSlots((current) =>
-        current.map((item) =>
-          item.id === slot.id
-            ? { ...item, is_for_one: nextValue }
-            : item
-        )
-      );
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? `No se pudo cambiar el número de personas: ${error.message}`
-          : "No se pudo cambiar el número de personas."
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function toggleMealFlag(
-    slot: Slot,
-    flag: "needs_defrost" | "needs_shopping"
-  ) {
-    if (busy || !slot.dish_id || isBlocked(slot)) return;
-
-    const nextValue = !slot[flag];
-    const updateValues =
-      flag === "needs_defrost"
-        ? { needs_defrost: nextValue }
-        : { needs_shopping: nextValue };
-
-    setBusy(true);
-    setMessage("");
-
-    try {
-      const { error } = await supabase
-        .from("meal_slots")
-        .update(updateValues)
-        .eq("id", slot.id);
-
-      if (error) throw error;
-
-      setSlots((current) =>
-        current.map((item) =>
-          item.id === slot.id ? { ...item, [flag]: nextValue } : item
-        )
-      );
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? `No se pudo actualizar: ${error.message}`
-          : "No se pudo actualizar el estado."
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function selectForSwap(
+  async function performSwap(
     target: Slot | undefined,
-    targetDate: string,
-    targetMealType: MealType
-  ) {
-    if (busy || (target && isBlocked(target))) return;
-
-    if (!selectedSlot) {
-      if (!canSwap(target)) return;
-
-      setSelectedSlot(target!.id);
-      setMessage("");
-      return;
-    }
-
-    if (target?.id === selectedSlot) {
-      setSelectedSlot(null);
-      return;
-    }
-
-    const source = slots.find((slot) => slot.id === selectedSlot);
-
-    if (!source || !canSwap(source)) {
-      setSelectedSlot(null);
-      return;
-    }
-
-    setBusy(true);
-    setMessage("");
-
-    try {
-      if (!target || !target.dish_id) {
-        const destinationMenuId = await ensureMenuIdForDate(targetDate);
-        const destinationDate = keyToDate(targetDate);
-
-        if (target) {
-          const { error } = await supabase
-            .from("meal_slots")
-            .update({
-              dish_id: source.dish_id,
-              special_label: source.special_label,
-              is_for_one: source.is_for_one,
-              needs_defrost: source.needs_defrost,
-              needs_shopping: source.needs_shopping,
-            })
-            .eq("id", target.id);
-
-          if (error) throw error;
-        } else {
-          const { error } = await supabase.from("meal_slots").insert({
-            menu_id: destinationMenuId,
-            day_of_week: getWeekday(destinationDate),
-            meal_type: targetMealType,
-            dish_id: source.dish_id,
-            special_label: source.special_label,
-            is_for_one: source.is_for_one,
-            needs_defrost: source.needs_defrost,
-            needs_shopping: source.needs_shopping,
-          });
-
-          if (error) throw error;
-        }
-
-        const { error: deleteError } = await supabase
-          .from("meal_slots")
-          .delete()
-          .eq("id", source.id);
-
-        if (deleteError) {
-          await loadMenu();
-          throw deleteError;
-        }
-
-        await loadMenu();
-        return;
-      }
-
-      const sourceValues = {
-        dish_id: source.dish_id,
-        special_label: source.special_label,
-        is_for_one: source.is_for_one,
-        needs_defrost: source.needs_defrost,
-        needs_shopping: source.needs_shopping,
-      };
-
-      const targetValues = {
-        dish_id: target.dish_id,
-        special_label: target.special_label,
-        is_for_one: target.is_for_one,
-        needs_defrost: target.needs_defrost,
-        needs_shopping: target.needs_shopping,
-      };
-
-      const { error: firstError } = await supabase
-        .from("meal_slots")
-        .update(targetValues)
-        .eq("id", source.id);
-
-      if (firstError) throw firstError;
-
-      const { error: secondError } = await supabase
-        .from("meal_slots")
-        .update(sourceValues)
-        .eq("id", target.id);
-
-      if (secondError) {
-        await supabase
-          .from("meal_slots")
-          .update(sourceValues)
-          .eq("id", source.id);
-
-        await loadMenu();
-        throw secondError;
-      }
-
-      await loadMenu();
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? `No se pudo completar la operación: ${error.message}`
-          : "No se pudo completar la operación."
-      );
-    } finally {
-      setSelectedSlot(null);
-      setBusy(false);
-    }
-  }
-
-  function handlePointerDown(
-    event: ReactPointerEvent<HTMLDivElement>,
-    slot?: Slot
-  ) {
-    if (busy || loading || !canSwap(slot)) return;
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-
-    cancelLongPress();
-    longPressTriggered.current = false;
-    pointerStart.current = { x: event.clientX, y: event.clientY };
-
-    longPressTimer.current = window.setTimeout(() => {
-      if (!slot) return;
-
-      longPressTriggered.current = true;
-      setSelectedSlot(slot.id);
-      setMessage("");
-      longPressTimer.current = null;
-    }, LONG_PRESS_MS);
-  }
-
-  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!pointerStart.current) return;
-
-    const dx = event.clientX - pointerStart.current.x;
-    const dy = event.clientY - pointerStart.current.y;
-
-    if (Math.hypot(dx, dy) > MOVE_CANCEL_PX) {
-      cancelLongPress();
-    }
-  }
-
-  function handlePointerUp(
-    slot: Slot | undefined,
     dateKey: string,
     mealType: MealType
   ) {
-    cancelLongPress();
-    pointerStart.current = null;
+    const source = slots.find((s) => s.id === swapSource);
 
-    if (longPressTriggered.current) {
-      longPressTriggered.current = false;
+    if (!source || !canSwap(source) || target?.id === source.id) {
+      setSwapSource(null);
       return;
     }
 
-    if (selectedSlot) {
-      void selectForSwap(slot, dateKey, mealType);
-    }
-  }
+    if (isBlocked(target)) return;
 
-  function handlePointerCancel() {
-    cancelLongPress();
-    pointerStart.current = null;
-    longPressTriggered.current = false;
-  }
+    await run("No se pudo completar el intercambio", async () => {
+      const sourceValues = pickValues(source);
 
-  async function assignDish(dish: Dish) {
-    if (!pickerTarget || busy) return;
+      try {
+        if (!target || !target.dish_id) {
+          if (target) {
+            const { error } = await supabase
+              .from("meal_slots")
+              .update(sourceValues)
+              .eq("id", target.id);
+            if (error) throw error;
+          } else {
+            const id = await ensureMenuId();
+            const { error } = await supabase.from("meal_slots").insert({
+              ...sourceValues,
+              menu_id: id,
+              day_of_week: getWeekday(keyToDate(dateKey)),
+              meal_type: mealType,
+            });
+            if (error) throw error;
+          }
 
-    const { dateKey, mealType } = pickerTarget;
-    const existing = findSlot(dateKey, mealType);
+          const { error: deleteError } = await supabase
+            .from("meal_slots")
+            .delete()
+            .eq("id", source.id);
+          if (deleteError) throw deleteError;
+          return;
+        }
 
-    setBusy(true);
-    setMessage("");
+        const targetValues = pickValues(target);
 
-    try {
-      if (existing) {
-        const { error } = await supabase
+        const { error: first } = await supabase
           .from("meal_slots")
-          .update({
-            dish_id: dish.id,
-            special_label: null,
-            is_for_one: false,
-            needs_defrost: false,
-            needs_shopping: false,
-          })
-          .eq("id", existing.id);
+          .update(targetValues)
+          .eq("id", source.id);
+        if (first) throw first;
 
-        if (error) throw error;
-      } else {
-        const menuId = await ensureMenuIdForDate(dateKey);
+        const { error: second } = await supabase
+          .from("meal_slots")
+          .update(sourceValues)
+          .eq("id", target.id);
 
-        const { error } = await supabase.from("meal_slots").insert({
-          menu_id: menuId,
-          day_of_week: getWeekday(keyToDate(dateKey)),
-          meal_type: mealType,
-          dish_id: dish.id,
-          special_label: null,
-          is_for_one: false,
-          needs_defrost: false,
-          needs_shopping: false,
-        });
-
-        if (error) throw error;
+        if (second) {
+          await supabase
+            .from("meal_slots")
+            .update(sourceValues)
+            .eq("id", source.id);
+          throw second;
+        }
+      } finally {
+        await loadMenu(true);
+        setSwapSource(null);
       }
+    });
+  }
 
-      setPickerTarget(null);
-      setDishSearch("");
-      await loadMenu();
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? `No se pudo asignar el plato: ${error.message}`
-          : "No se pudo asignar el plato."
+  /* Notes */
+
+  async function addNote(text: string) {
+    const clean = text.trim();
+    if (!clean) return;
+
+    await run("No se pudo añadir la nota", async () => {
+      const id = await ensureMenuId();
+      const { data, error } = await supabase
+        .from("menu_notes")
+        .insert({ menu_id: id, text: clean })
+        .select("id, text, done")
+        .single();
+
+      if (error) throw error;
+      setNotes((cur) => [...cur, data as MenuNote]);
+    });
+  }
+
+  async function toggleNote(note: MenuNote) {
+    setNotes((cur) =>
+      cur.map((n) => (n.id === note.id ? { ...n, done: !n.done } : n))
+    );
+
+    const { error } = await supabase
+      .from("menu_notes")
+      .update({ done: !note.done })
+      .eq("id", note.id);
+
+    if (error) {
+      setNotes((cur) =>
+        cur.map((n) => (n.id === note.id ? { ...n, done: note.done } : n))
       );
-    } finally {
-      setBusy(false);
+      fail("No se pudo actualizar la nota", error);
     }
   }
 
-  const dates = getRangeDates();
+  async function deleteNote(note: MenuNote) {
+    setNotes((cur) => cur.filter((n) => n.id !== note.id));
 
-  const todayKey = dateToKey(new Date());
+    const { error } = await supabase
+      .from("menu_notes")
+      .delete()
+      .eq("id", note.id);
 
-  const dateLabel = formatWeekRange(weekStart, weekEnd);
+    if (error) {
+      setNotes((cur) => [...cur, note]);
+      fail("No se pudo borrar la nota", error);
+    }
+  }
 
-  const filteredDishes = availableDishes.filter((dish) =>
-    normalizeSearch(dish.name).includes(normalizeSearch(dishSearch))
-  );
+  /* ── Interaction ─────────────────────────────────────────────────────── */
+
+  function handleSlotTap(slot: Slot | undefined, target: Target) {
+    if (busy || loading) return;
+
+    if (swapSource) {
+      void performSwap(slot, target.dateKey, target.mealType);
+      return;
+    }
+
+    if (!slot || (!slot.dish_id && !isBlocked(slot))) {
+      setPicker(target);
+      return;
+    }
+
+    setSheetSlotId(slot.id);
+  }
+
+  function startSwap(slot: Slot) {
+    setSheetSlotId(null);
+    setSwapSource(slot.id);
+  }
+
+  /* ── Render ──────────────────────────────────────────────────────────── */
+
+  const weekTitle = keyToDate(weekStart).toLocaleDateString("es-ES", {
+    day: "numeric",
+    month: "long",
+  });
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 bg-[#fafaf9] p-3 text-[#292524] sm:p-6">
-      {/* Selector semanal */}
-      <section className="flex shrink-0 items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white p-3 sm:p-4">
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 bg-[#fafaf9] p-3 pb-28 text-[#292524] sm:p-6 sm:pb-28">
+      {/* Week navigator */}
+      <section className="sticky top-0 z-30 -mx-3 flex items-center justify-between gap-3 border-b border-stone-200 bg-[#fafaf9]/95 px-3 py-2 backdrop-blur sm:-mx-6 sm:px-6">
         <button
           type="button"
           onClick={() => changeWeek(-1)}
@@ -835,26 +738,22 @@ const goToCurrentWeek = useCallback(() => {
         </button>
 
         <div className="min-w-0 text-center">
-          <h2 className="text-sm font-semibold text-stone-900 sm:text-base">
-            Semana del{" "}
-            {keyToDate(weekStart).toLocaleDateString("es-ES", {
-              day: "numeric",
-              month: "long",
-            })}
-          </h2>
-
-          <p className="mt-1 text-xs text-stone-500 sm:text-sm">
-            {dateLabel}
+          <h1 className="text-base font-semibold text-stone-900">
+            Semana del {weekTitle}
+          </h1>
+          <p className="text-xs text-stone-500">
+            {formatWeekRange(weekStart, weekEnd)}
           </p>
-
-          <button
-            type="button"
-            onClick={goToCurrentWeek}
-            disabled={loading || busy}
-            className="mt-1 text-xs font-medium text-stone-600 underline underline-offset-2 hover:text-stone-900 disabled:opacity-40"
-          >
-            Ir a esta semana
-          </button>
+          {!isCurrentWeek && (
+            <button
+              type="button"
+              onClick={() => goToWeek(dateToKey(getMonday(new Date())))}
+              disabled={loading || busy}
+              className="mt-0.5 text-xs font-medium text-[#293d30] underline underline-offset-2 disabled:opacity-40"
+            >
+              Volver a esta semana
+            </button>
+          )}
         </div>
 
         <button
@@ -868,393 +767,805 @@ const goToCurrentWeek = useCallback(() => {
         </button>
       </section>
 
-
-      {message && (
-      <p role="status" className="shrink-0 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-              {message}
-            </p>
+      {/* Weekly summary */}
+      {!loading && (
+        <section
+          aria-label="Resumen de la semana"
+          className="flex flex-wrap gap-2 text-xs"
+        >
+          <SummaryChip
+            tone="green"
+            label={`${summary.planned}/14 planificadas`}
+          />
+          {summary.empty > 0 && (
+            <SummaryChip tone="stone" label={`${summary.empty} sin asignar`} />
+          )}
+          {summary.shopping > 0 && (
+            <SummaryChip
+              tone="red"
+              label={`🛒 ${summary.shopping} por comprar`}
+            />
+          )}
+          {summary.defrost > 0 && (
+            <SummaryChip
+              tone="blue"
+              label={`🧊 ${summary.defrost} por descongelar`}
+            />
+          )}
+        </section>
       )}
 
+      {/* Notes */}
+      {!loading && (
+        <NotesPanel
+          notes={notes}
+          busy={busy}
+          onAdd={addNote}
+          onToggle={toggleNote}
+          onDelete={deleteNote}
+        />
+      )}
 
-        {loading ? (
-          <div className="rounded-2xl border border-stone-200 bg-white p-10 text-center text-sm text-stone-500">
-            Cargando menú...
-          </div>
-        ) : dates.length === 0 ? (
-          <div className="rounded-2xl border border-stone-200 bg-white p-10 text-center text-sm text-stone-500">
-            No se pudo calcular la semana seleccionada.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
-            {dates.map((date) => {
-              const dateKey = dateToKey(date);
-              const isToday = dateKey === todayKey;
-
-              const dayName = date.toLocaleDateString("es-ES", {
-                weekday: "long",
-              });
-
-              const formattedDate = date.toLocaleDateString("es-ES", {
-                day: "numeric",
-                month: "short",
-              });
-
-              const daySlots = slots.filter(
-                (slot) => slot.date_key === dateKey
-              );
-
-              const filledCount = daySlots.filter(
-                (slot) => Boolean(slot.dish_id) && !isBlocked(slot)
-              ).length;
-
-              return (
-                <section
-                  key={dateKey}
-                  className={`min-w-0 space-y-2 rounded-2xl border p-2.5 ${
-                    isToday
-                      ? "border-[#293d30] bg-[#f3f7f4] ring-2 ring-[#293d30]/20"
-                      : "border-stone-200 bg-white"
-                  }`}
-                  ref={isToday ? todayRef : undefined}
-                >
-                  <header
-                    className={`flex min-h-[54px] items-center justify-between gap-1 border-b px-1 pb-2 ${
-                      isToday ? "border-[#293d30]/20" : "border-stone-100"
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <h2 className="truncate text-sm font-semibold capitalize text-stone-800">
-                        {dayName}
-                      </h2>
-                      <p className="mt-0.5 text-xs text-stone-500">{formattedDate}</p>
-                    </div>
-
-                    <div className="flex shrink-0 items-center gap-1">
-                      {isToday && (
-                        <span className="rounded-md bg-[#293d30] px-1.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white">
-                          Hoy
-                        </span>
-                      )}
-                      <span className="rounded-md bg-stone-100 px-1.5 py-1 text-[10px] font-medium text-stone-500">
-                        {filledCount}/2
-                      </span>
-                    </div>
-                  </header>
-
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-1">
-                    {(
-                      [
-                        { label: "Comida", type: "lunch" },
-                        { label: "Cena", type: "dinner" },
-                      ] as const
-                    ).map(({ label, type }) => {
-                      const slot = findSlot(dateKey, type);
-                      const blocked = slot ? isBlocked(slot) : false;
-                      const selected = slot?.id === selectedSlot;
-
-                      const dishName = slot
-                        ? slot.dishes?.name ??
-                          (blocked
-                            ? "No disponible"
-                            : slot.special_label ?? "Opción especial")
-                        : "Sin asignar";
-
-                      const slotStyle = selected
-                        ? "border-blue-500 bg-white ring-2 ring-blue-100"
-                        : blocked
-                          ? "border-[#f4d4d0] bg-[#fbe9e7]"
-                          : slot?.is_for_one
-                            ? "border-amber-300 bg-amber-50"
-                            : slot
-                              ? "border-[#d3e8d8] bg-[#e6f3e9]"
-                              : "border-stone-200 bg-[#f5f4f1]";
-
-                      return (
-                        <div
-                          key={type}
-                          onPointerDown={(event) =>
-                            handlePointerDown(event, slot)
-                          }
-                          onPointerMove={handlePointerMove}
-                          onPointerUp={() =>
-                            handlePointerUp(slot, dateKey, type)
-                          }
-                          onPointerCancel={handlePointerCancel}
-                          className={`relative flex min-h-[142px] min-w-0 flex-col rounded-xl border p-2 pt-9 sm:p-3 sm:pt-9 ${slotStyle} ${
-                            slot?.needs_shopping ? "!border-red-500" : ""
-                          } ${slot && !blocked ? "cursor-pointer" : ""}`}
-                          style={{ touchAction: "pan-y" }}
-                        >
-                          {slot?.dish_id && !blocked && (
-                            <button
-                              type="button"
-                              aria-label="Borrar plato"
-                              title="Borrar plato"
-                              onPointerDown={(event) =>
-                                event.stopPropagation()
-                              }
-                              onPointerUp={(event) =>
-                                event.stopPropagation()
-                              }
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void removeSlot(slot.id);
-                              }}
-                              disabled={busy}
-                              className="absolute right-1 top-1 z-10 flex h-7 w-7 items-center justify-center rounded-full text-lg leading-none text-stone-400 transition hover:bg-red-100 hover:text-red-600 disabled:opacity-50 sm:right-2 sm:top-2"
-                            >
-                              ×
-                            </button>
-                          )}
-
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="text-xs font-medium text-stone-500">
-                              {label}
-                            </span>
-
-                            {selected && (
-                              <span className="text-[10px] font-semibold text-blue-600">
-                                Elegido
-                              </span>
-                            )}
-                          </div>
-
-                          <p
-                            className={`mt-3 flex-1 break-words text-sm font-medium leading-snug ${
-                              blocked
-                                ? "text-[#a34c43]"
-                                : slot?.is_for_one
-                                  ? "text-amber-900"
-                                  : slot
-                                    ? "text-[#285d3b]"
-                                    : "text-stone-400"
-                            }`}
-                          >
-                            {dishName}
-                          </p>
-
-                          {slot?.dish_id && !blocked && (
-                            <div className="mt-3 flex items-center gap-2">
-                              <button
-                                type="button"
-                                onPointerDown={(event) => event.stopPropagation()}
-                                onPointerUp={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void toggleMealFlag(slot, "needs_defrost");
-                                }}
-                                disabled={busy}
-                                aria-label="Marcar si necesita descongelarse"
-                                aria-pressed={slot.needs_defrost}
-                                title="Necesita descongelarse"
-                                className={`flex h-10 flex-1 items-center justify-center rounded-lg border text-lg transition disabled:opacity-50 ${
-                                  slot.needs_defrost
-                                    ? "border-blue-500 bg-blue-100 text-blue-700"
-                                    : "border-stone-200 bg-white text-stone-400 hover:bg-blue-50"
-                                }`}
-                              >
-                                🧊
-                              </button>
-
-                              <button
-                                type="button"
-                                onPointerDown={(event) => event.stopPropagation()}
-                                onPointerUp={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void toggleMealFlag(slot, "needs_shopping");
-                                }}
-                                disabled={busy}
-                                aria-label="Marcar si necesita compra"
-                                aria-pressed={slot.needs_shopping}
-                                title="Necesita compra"
-                                className={`flex h-10 flex-1 items-center justify-center rounded-lg border text-lg font-semibold transition disabled:opacity-50 ${
-                                  slot.needs_shopping
-                                    ? "border-red-500 bg-red-100 text-red-700"
-                                    : "border-stone-200 bg-white text-stone-400 hover:bg-red-50"
-                                }`}
-                              >
-                                $
-                              </button>
-                            </div>
-                          )}
-
-                          {slot?.is_for_one && (
-                            <span className="mt-1 text-xs font-semibold text-amber-800">
-                              👤 Solo 1 persona
-                            </span>
-                          )}
-
-                          <button
-                            type="button"
-                            onPointerDown={(event) =>
-                              event.stopPropagation()
-                            }
-                            onPointerUp={(event) =>
-                              event.stopPropagation()
-                            }
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setDishSearch("");
-                              setPickerTarget({
-                                dateKey,
-                                mealType: type,
-                              });
-                            }}
-                            disabled={busy}
-                            className="mt-3 w-full rounded-lg bg-white px-1.5 py-2.5 text-xs font-semibold text-stone-700 shadow-sm transition hover:bg-stone-50 disabled:opacity-50 sm:px-2"
-                          >
-                            {slot?.dish_id
-                              ? "Cambiar plato"
-                              : "Elegir plato"}
-                          </button>
-
-                          {slot?.dish_id && !blocked && (
-                            <button
-                              type="button"
-                              onPointerDown={(event) =>
-                                event.stopPropagation()
-                              }
-                              onPointerUp={(event) =>
-                                event.stopPropagation()
-                              }
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void toggleForOne(slot);
-                              }}
-                              disabled={busy}
-                              aria-pressed={slot.is_for_one}
-                              className={`mt-2 w-full rounded-lg px-1 py-2.5 text-xs font-semibold transition disabled:opacity-50 sm:px-2 ${
-                                slot.is_for_one
-                                  ? "bg-amber-200 text-amber-900 hover:bg-amber-300"
-                                  : "bg-white/80 text-stone-600 hover:bg-white"
-                              }`}
-                            >
-                              {slot.is_for_one ? "👤 1 · ↻ 2" : "👥 Para 1"}
-                            </button>
-                          )}
-
-                          <button
-                            type="button"
-                            onPointerDown={(event) =>
-                              event.stopPropagation()
-                            }
-                            onPointerUp={(event) =>
-                              event.stopPropagation()
-                            }
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void toggleBlocked(dateKey, type);
-                            }}
-                            disabled={busy || (!!slot && !blocked)}
-                            className={`mt-2 w-full rounded-lg px-1 py-2 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 sm:px-2 ${
-                              blocked
-                                ? "bg-white/80 text-[#a34c43] hover:bg-white"
-                                : "text-stone-500 hover:bg-white/80 hover:text-stone-800"
-                            }`}
-                            title={
-                              slot && !blocked
-                                ? "Quita primero el plato"
-                                : undefined
-                            }
-                          >
-                            {blocked ? "Hacer disponible" : "No disponible"}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
-        )}
-
-      {pickerTarget && (
-        <div
-          className="fixed inset-0 z-[100] flex items-end justify-center overflow-hidden bg-black/40 p-0 sm:items-center sm:p-4"
-          onClick={() => {
-            if (!busy) setPickerTarget(null);
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="dish-picker-title"
-            className="flex max-h-[85dvh] w-full max-w-lg flex-col rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex shrink-0 items-center justify-between gap-3">
-              <div>
-                <h2
-                  id="dish-picker-title"
-                  className="text-lg font-semibold text-stone-900"
-                >
-                  Elegir plato
-                </h2>
-                <p className="mt-1 text-sm text-stone-500">
-                  {keyToDate(pickerTarget.dateKey).toLocaleDateString(
-                    "es-ES",
-                    {
-                      weekday: "long",
-                      day: "numeric",
-                      month: "long",
-                    }
-                  )}
-                  {" · "}
-                  {pickerTarget.mealType === "lunch" ? "Comida" : "Cena"}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (!busy) setPickerTarget(null);
-                }}
-                disabled={busy}
-                className="rounded-lg px-3 py-2 text-sm text-stone-500 hover:bg-stone-100 disabled:opacity-50"
-              >
-                Cerrar
-              </button>
-            </div>
-
-            <input
-              autoFocus
-              type="search"
-              value={dishSearch}
-              onChange={(event) => setDishSearch(event.target.value)}
-              placeholder="Buscar plato..."
-              className="mt-4 w-full shrink-0 rounded-xl border border-stone-200 px-4 py-3 text-sm outline-none focus:border-stone-500"
+      {/* Week grid */}
+      {loading ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+          {Array.from({ length: 7 }, (_, i) => (
+            <div
+              key={i}
+              className="h-56 animate-pulse rounded-2xl border border-stone-200 bg-white"
             />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+          {dates.map((date) => {
+            const dateKey = dateToKey(date);
+            const isToday = dateKey === todayKey;
+            const isPast = dateKey < todayKey;
 
-            <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain">
-              {filteredDishes.map((dish) => (
-                <button
-                  key={dish.id}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void assignDish(dish)}
-                  className="w-full rounded-xl px-4 py-3 text-left text-sm text-stone-800 transition hover:bg-stone-100 disabled:opacity-50"
+            const filled = MEALS.filter(({ type }) => {
+              const s = findSlot(dateKey, type);
+              return s?.dish_id && !isBlocked(s);
+            }).length;
+
+            return (
+              <section
+                key={dateKey}
+                ref={isToday ? todayRef : undefined}
+                className={`min-w-0 space-y-2 rounded-2xl border p-2.5 ${
+                  isToday
+                    ? "border-[#293d30] bg-[#f3f7f4] ring-2 ring-[#293d30]/20"
+                    : isPast
+                      ? "border-stone-200 bg-white/60"
+                      : "border-stone-200 bg-white"
+                }`}
+              >
+                <header
+                  className={`flex items-center justify-between gap-1 border-b px-1 pb-2 ${
+                    isToday ? "border-[#293d30]/20" : "border-stone-100"
+                  }`}
                 >
-                  {dish.name}
-                </button>
-              ))}
+                  <div className="min-w-0">
+                    <h2 className="truncate text-sm font-semibold capitalize text-stone-800">
+                      {date.toLocaleDateString("es-ES", { weekday: "long" })}
+                    </h2>
+                    <p className="text-xs text-stone-500">
+                      {date.toLocaleDateString("es-ES", {
+                        day: "numeric",
+                        month: "short",
+                      })}
+                    </p>
+                  </div>
 
-              {filteredDishes.length === 0 && (
-                <p className="px-4 py-8 text-center text-sm text-stone-500">
-                  No hay platos que coincidan con la búsqueda.
-                </p>
-              )}
+                  <div className="flex shrink-0 items-center gap-1">
+                    {isToday && (
+                      <span className="rounded-md bg-[#293d30] px-1.5 py-1 text-[11px] font-semibold text-white">
+                        Hoy
+                      </span>
+                    )}
+                    <span className="rounded-md bg-stone-100 px-1.5 py-1 text-[11px] font-medium text-stone-500">
+                      {filled}/2
+                    </span>
+                  </div>
+                </header>
 
-              {busy && (
-                <p className="py-2 text-center text-sm text-stone-500">
-                  Guardando...
-                </p>
-              )}
-            </div>
-          </section>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-1">
+                  {MEALS.map(({ label, type }) => {
+                    const slot = findSlot(dateKey, type);
+                    return (
+                      <SlotCard
+                        key={type}
+                        slot={slot}
+                        label={label}
+                        selected={Boolean(slot && slot.id === swapSource)}
+                        swapActive={Boolean(swapSource)}
+                        disabled={busy}
+                        onTap={() => handleSlotTap(slot, { dateKey, mealType: type })}
+                        onLongPress={() => {
+                          if (slot && canSwap(slot)) setSwapSource(slot.id);
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Slot actions */}
+      {sheetSlot && (
+        <SlotSheet
+          slot={sheetSlot}
+          busy={busy}
+          onClose={() => setSheetSlotId(null)}
+          onChangeDish={() => {
+            setSheetSlotId(null);
+            setPicker({
+              dateKey: sheetSlot.date_key,
+              mealType: sheetSlot.meal_type,
+            });
+          }}
+          onToggle={(flag) =>
+            void patchSlot(sheetSlot.id, { [flag]: !sheetSlot[flag] })
+          }
+          onSaveNote={(note) => void patchSlot(sheetSlot.id, { note })}
+          onSwap={() => startSwap(sheetSlot)}
+          onRemove={() => void removeSlot(sheetSlot)}
+          onUnblock={() => {
+            setSheetSlotId(null);
+            void toggleBlocked({
+              dateKey: sheetSlot.date_key,
+              mealType: sheetSlot.meal_type,
+            });
+          }}
+        />
+      )}
+
+      {/* Dish picker */}
+      {picker && (
+        <DishPicker
+          target={picker}
+          dishes={dishes}
+          busy={busy}
+          onClose={() => setPicker(null)}
+          onPick={(dish) => void assignDish(dish, picker)}
+          onCreate={(name) => void createAndAssign(name, picker)}
+          onBlock={
+            findSlot(picker.dateKey, picker.mealType)
+              ? undefined
+              : () => {
+                  const target = picker;
+                  setPicker(null);
+                  void toggleBlocked(target);
+                }
+          }
+        />
+      )}
+
+      {/* Swap mode bar */}
+      {swapSource && (
+        <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center p-3">
+          <div className="flex w-full max-w-md items-center justify-between gap-3 rounded-2xl bg-[#293d30] px-4 py-3 text-sm text-white shadow-lg">
+            <span>Toca otra casilla para mover o intercambiar.</span>
+            <button
+              type="button"
+              onClick={() => setSwapSource(null)}
+              className="shrink-0 rounded-lg bg-white/15 px-3 py-1.5 font-medium hover:bg-white/25"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div
+          role="status"
+          className={`fixed inset-x-0 z-50 flex justify-center px-3 ${
+            swapSource ? "bottom-24" : "bottom-4"
+          }`}
+        >
+          <div
+            className={`flex w-full max-w-md items-start gap-3 rounded-xl border p-3 text-sm shadow-lg ${
+              toast.tone === "error"
+                ? "border-red-200 bg-red-50 text-red-800"
+                : "border-stone-200 bg-white text-stone-700"
+            }`}
+          >
+            <p className="flex-1">{toast.text}</p>
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              aria-label="Cerrar aviso"
+              className="text-lg leading-none opacity-60 hover:opacity-100"
+            >
+              ×
+            </button>
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Summary chip                                                               */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function SummaryChip({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "green" | "stone" | "red" | "blue";
+}) {
+  const styles = {
+    green: "bg-[#e6f3e9] text-[#285d3b]",
+    stone: "bg-stone-100 text-stone-600",
+    red: "bg-red-50 text-red-700",
+    blue: "bg-blue-50 text-blue-700",
+  }[tone];
+
+  return (
+    <span className={`rounded-full px-3 py-1.5 font-medium ${styles}`}>
+      {label}
+    </span>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Notes panel                                                                */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function NotesPanel({
+  notes,
+  busy,
+  onAdd,
+  onToggle,
+  onDelete,
+}: {
+  notes: MenuNote[];
+  busy: boolean;
+  onAdd: (text: string) => Promise<void>;
+  onToggle: (note: MenuNote) => void;
+  onDelete: (note: MenuNote) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!text) return;
+    setDraft("");
+    void onAdd(text);
+  }
+
+  return (
+    <section
+      aria-label="Notas de la semana"
+      className="rounded-2xl border border-stone-200 bg-white p-3"
+    >
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-sm font-semibold text-stone-800">
+          Notas de la semana
+        </h2>
+        {notes.length > 0 && (
+          <span className="text-xs text-stone-400">
+            {notes.filter((n) => !n.done).length} pendientes
+          </span>
+        )}
+      </div>
+
+      {notes.length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-2">
+          {notes.map((note) => (
+            <li
+              key={note.id}
+              className={`flex items-center overflow-hidden rounded-full border text-sm ${
+                note.done
+                  ? "border-stone-200 bg-stone-50 text-stone-400"
+                  : "border-amber-200 bg-amber-50 text-amber-900"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => onToggle(note)}
+                aria-pressed={note.done}
+                title={note.done ? "Marcar como pendiente" : "Marcar como hecha"}
+                className={`py-1.5 pl-3 pr-2 text-left ${
+                  note.done ? "line-through" : ""
+                }`}
+              >
+                {note.text}
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(note)}
+                aria-label={`Borrar nota: ${note.text}`}
+                className="px-2.5 py-1.5 text-base leading-none opacity-50 hover:opacity-100"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <form onSubmit={submit} className="mt-2 flex gap-2">
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          maxLength={140}
+          placeholder="Ej: salsa de roquefort con las sobras"
+          className="min-w-0 flex-1 rounded-xl border border-stone-200 px-3 py-2.5 text-sm outline-none focus:border-[#293d30]"
+        />
+        <button
+          type="submit"
+          disabled={busy || !draft.trim()}
+          className="shrink-0 rounded-xl bg-[#293d30] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1f2f25] disabled:opacity-40"
+        >
+          Añadir
+        </button>
+      </form>
+    </section>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Slot card                                                                  */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function SlotCard({
+  slot,
+  label,
+  selected,
+  swapActive,
+  disabled,
+  onTap,
+  onLongPress,
+}: {
+  slot?: Slot;
+  label: string;
+  selected: boolean;
+  swapActive: boolean;
+  disabled: boolean;
+  onTap: () => void;
+  onLongPress: () => void;
+}) {
+  const timer = useRef<number | null>(null);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const fired = useRef(false);
+
+  const clear = useCallback(() => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    start.current = null;
+  }, []);
+
+  useEffect(() => clear, [clear]);
+
+  const blocked = isBlocked(slot);
+  const hasDish = Boolean(slot?.dish_id) && !blocked;
+
+  function onPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!hasDish || disabled || swapActive) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+
+    clear();
+    fired.current = false;
+    start.current = { x: event.clientX, y: event.clientY };
+
+    timer.current = window.setTimeout(() => {
+      fired.current = true;
+      timer.current = null;
+      navigator.vibrate?.(15);
+      onLongPress();
+    }, LONG_PRESS_MS);
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!start.current) return;
+    const dx = event.clientX - start.current.x;
+    const dy = event.clientY - start.current.y;
+    if (Math.hypot(dx, dy) > MOVE_CANCEL_PX) clear();
+  }
+
+  function onClick() {
+    if (fired.current) {
+      fired.current = false;
+      return;
+    }
+    onTap();
+  }
+
+  const name = slot
+    ? (slot.dishes?.name ?? (blocked ? "No disponible" : slot.special_label ?? "Opción especial"))
+    : "Añadir plato";
+
+  const surface = selected
+    ? "border-blue-500 bg-white ring-2 ring-blue-100"
+    : blocked
+      ? "border-[#f4d4d0] bg-[#fbe9e7]"
+      : slot?.needs_shopping
+        ? "border-red-400 bg-[#e6f3e9]"
+        : slot?.is_for_one
+          ? "border-amber-300 bg-amber-50"
+          : hasDish
+            ? "border-[#d3e8d8] bg-[#e6f3e9]"
+            : "border-dashed border-stone-300 bg-[#f5f4f1]";
+
+  const nameColor = blocked
+    ? "text-[#a34c43]"
+    : slot?.is_for_one
+      ? "text-amber-900"
+      : hasDish
+        ? "text-[#285d3b]"
+        : "text-stone-400";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={clear}
+      onPointerCancel={clear}
+      onPointerLeave={clear}
+      onContextMenu={(event) => event.preventDefault()}
+      disabled={disabled}
+      aria-label={`${label}: ${name}${slot?.note ? `. Nota: ${slot.note}` : ""}`}
+      style={{ touchAction: "pan-y", WebkitTouchCallout: "none" }}
+      className={`flex min-h-[96px] w-full min-w-0 select-none flex-col rounded-xl border p-2.5 text-left transition active:scale-[0.98] disabled:opacity-60 ${surface}`}
+    >
+      <span className="flex w-full items-center justify-between gap-1">
+        <span className="text-xs font-medium text-stone-500">{label}</span>
+        <span className="flex items-center gap-1 text-xs">
+          {slot?.needs_defrost && hasDish && <span title="Descongelar">🧊</span>}
+          {slot?.needs_shopping && hasDish && <span title="Comprar">🛒</span>}
+          {slot?.is_for_one && hasDish && (
+            <span title="Solo 1 persona" className="font-semibold text-amber-800">
+              👤1
+            </span>
+          )}
+        </span>
+      </span>
+
+      <span
+        className={`mt-1.5 break-words text-sm font-medium leading-snug ${nameColor}`}
+      >
+        {name}
+      </span>
+
+      {slot?.note && hasDish && (
+        <span className="mt-1.5 line-clamp-2 break-words text-xs italic text-stone-600">
+          📝 {slot.note}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Overlay (shared by sheet + picker)                                         */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function Overlay({
+  onClose,
+  labelledBy,
+  children,
+}: {
+  onClose: () => void;
+  labelledBy: string;
+  children: ReactNode;
+}) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-end justify-center overflow-hidden bg-black/40 sm:items-center sm:p-4"
+      onClick={onClose}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        onClick={(event) => event.stopPropagation()}
+        className="flex max-h-[85dvh] w-full max-w-lg flex-col rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl"
+      >
+        {children}
+      </section>
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Slot action sheet                                                          */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function SlotSheet({
+  slot,
+  busy,
+  onClose,
+  onChangeDish,
+  onToggle,
+  onSaveNote,
+  onSwap,
+  onRemove,
+  onUnblock,
+}: {
+  slot: Slot;
+  busy: boolean;
+  onClose: () => void;
+  onChangeDish: () => void;
+  onToggle: (flag: "needs_defrost" | "needs_shopping" | "is_for_one") => void;
+  onSaveNote: (note: string | null) => void;
+  onSwap: () => void;
+  onRemove: () => void;
+  onUnblock: () => void;
+}) {
+  const blocked = isBlocked(slot);
+  const [draft, setDraft] = useState(slot.note ?? "");
+
+  const commit = () => {
+    const next = draft.trim() || null;
+    if (next !== (slot.note ?? null)) onSaveNote(next);
+  };
+
+  // Make sure a half-written note is never lost when the sheet closes.
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+  useEffect(() => () => commitRef.current(), []);
+
+  const mealLabel = slot.meal_type === "lunch" ? "Comida" : "Cena";
+  const dateLabel = keyToDate(slot.date_key).toLocaleDateString("es-ES", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+
+  const toggles = [
+    { flag: "needs_defrost", icon: "🧊", label: "Descongelar", on: slot.needs_defrost, active: "border-blue-500 bg-blue-50 text-blue-700" },
+    { flag: "needs_shopping", icon: "🛒", label: "Comprar", on: slot.needs_shopping, active: "border-red-500 bg-red-50 text-red-700" },
+    { flag: "is_for_one", icon: "👤", label: "Solo 1", on: slot.is_for_one, active: "border-amber-400 bg-amber-50 text-amber-800" },
+  ] as const;
+
+  return (
+    <Overlay onClose={onClose} labelledBy="slot-sheet-title">
+      <div className="flex shrink-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2
+            id="slot-sheet-title"
+            className="break-words text-lg font-semibold text-stone-900"
+          >
+            {blocked ? "No disponible" : slot.dishes?.name ?? "Opción especial"}
+          </h2>
+          <p className="mt-0.5 text-sm capitalize text-stone-500">
+            {mealLabel}, {dateLabel}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg px-3 py-2 text-sm text-stone-500 hover:bg-stone-100"
+        >
+          Cerrar
+        </button>
+      </div>
+
+      {blocked ? (
+        <button
+          type="button"
+          onClick={onUnblock}
+          disabled={busy}
+          className="mt-5 w-full rounded-xl bg-[#293d30] py-3 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          Hacer disponible
+        </button>
+      ) : (
+        <div className="mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain">
+          <div>
+            <label
+              htmlFor="slot-note"
+              className="text-sm font-medium text-stone-700"
+            >
+              Nota
+            </label>
+            <input
+              id="slot-note"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={commit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commit();
+                  (event.target as HTMLInputElement).blur();
+                }
+              }}
+              maxLength={140}
+              placeholder="Ej: salsa de roquefort con las sobras"
+              className="mt-1.5 w-full rounded-xl border border-stone-200 px-3 py-3 text-sm outline-none focus:border-[#293d30]"
+            />
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            {toggles.map((t) => (
+              <button
+                key={t.flag}
+                type="button"
+                onClick={() => onToggle(t.flag)}
+                aria-pressed={t.on}
+                className={`flex flex-col items-center gap-1 rounded-xl border py-3 text-xs font-medium transition ${
+                  t.on
+                    ? t.active
+                    : "border-stone-200 bg-white text-stone-500 hover:bg-stone-50"
+                }`}
+              >
+                <span className="text-xl">{t.icon}</span>
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="divide-y divide-stone-100 overflow-hidden rounded-xl border border-stone-200">
+            <button
+              type="button"
+              onClick={onChangeDish}
+              className="w-full px-4 py-3 text-left text-sm text-stone-800 hover:bg-stone-50"
+            >
+              Cambiar plato
+            </button>
+            <button
+              type="button"
+              onClick={onSwap}
+              className="w-full px-4 py-3 text-left text-sm text-stone-800 hover:bg-stone-50"
+            >
+              Mover o intercambiar con otra casilla
+            </button>
+            <button
+              type="button"
+              onClick={onRemove}
+              className="w-full px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50"
+            >
+              Quitar plato
+            </button>
+          </div>
+        </div>
+      )}
+    </Overlay>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Dish picker                                                                */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function DishPicker({
+  target,
+  dishes,
+  busy,
+  onClose,
+  onPick,
+  onCreate,
+  onBlock,
+}: {
+  target: Target;
+  dishes: Dish[];
+  busy: boolean;
+  onClose: () => void;
+  onPick: (dish: Dish) => void;
+  onCreate: (name: string) => void;
+  onBlock?: () => void;
+}) {
+  const [search, setSearch] = useState("");
+
+  const query = normalizeSearch(search);
+  const filtered = useMemo(
+    () => dishes.filter((d) => normalizeSearch(d.name).includes(query)),
+    [dishes, query]
+  );
+  const exactMatch = dishes.some((d) => normalizeSearch(d.name) === query);
+  const canCreate = query.length > 0 && !exactMatch;
+
+  return (
+    <Overlay onClose={onClose} labelledBy="dish-picker-title">
+      <div className="flex shrink-0 items-start justify-between gap-3">
+        <div>
+          <h2
+            id="dish-picker-title"
+            className="text-lg font-semibold text-stone-900"
+          >
+            Elegir plato
+          </h2>
+          <p className="mt-0.5 text-sm capitalize text-stone-500">
+            {target.mealType === "lunch" ? "Comida" : "Cena"},{" "}
+            {keyToDate(target.dateKey).toLocaleDateString("es-ES", {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+            })}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg px-3 py-2 text-sm text-stone-500 hover:bg-stone-100"
+        >
+          Cerrar
+        </button>
+      </div>
+
+      <input
+        autoFocus
+        type="search"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="Buscar o escribir un plato nuevo..."
+        className="mt-4 w-full shrink-0 rounded-xl border border-stone-200 px-4 py-3 text-sm outline-none focus:border-[#293d30]"
+      />
+
+      <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain">
+        {canCreate && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onCreate(search)}
+            className="w-full rounded-xl bg-[#e6f3e9] px-4 py-3 text-left text-sm font-medium text-[#285d3b] transition hover:bg-[#d8ecdd] disabled:opacity-50"
+          >
+            Crear «{search.trim()}»
+          </button>
+        )}
+
+        {filtered.map((dish) => (
+          <button
+            key={dish.id}
+            type="button"
+            disabled={busy}
+            onClick={() => onPick(dish)}
+            className="w-full rounded-xl px-4 py-3 text-left text-sm text-stone-800 transition hover:bg-stone-100 disabled:opacity-50"
+          >
+            {dish.name}
+          </button>
+        ))}
+
+        {filtered.length === 0 && !canCreate && (
+          <p className="px-4 py-8 text-center text-sm text-stone-500">
+            Todavía no hay platos. Escribe un nombre para crear el primero.
+          </p>
+        )}
+      </div>
+
+      {onBlock && (
+        <button
+          type="button"
+          onClick={onBlock}
+          disabled={busy}
+          className="mt-3 w-full shrink-0 rounded-xl border border-stone-200 py-3 text-sm font-medium text-stone-600 hover:bg-stone-50 disabled:opacity-50"
+        >
+          Marcar como no disponible
+        </button>
+      )}
+    </Overlay>
   );
 }
