@@ -5,15 +5,25 @@ import { supabase } from "@/lib/supabase/client";
 import AuthPanel from "./components/AuthPanel";
 import SwipeDishes from "./components/SwipeDishes";
 import WeeklyMenu from "./components/WeeklyMenu";
+import ShoppingList from "./components/ShoppingList";
+import DishIngredients from "./components/DishIngredients";
+import IngredientsManager from "./components/IngredientsManager";
 import AddDish from "./components/AddDish";
 import LogoutButton from "./components/LogoutButton";
 import Nav, { type Section } from "./components/Nav";
 
 export default function Home() {
-  const [section, setSection] = useState<Section>("menu");
+  const [section, setSectionState] = useState<Section>("menu");
+  // Sub-views of the shopping tab.
+  const [subview, setSubview] = useState<"recipes" | "ingredients" | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [loggedIn, setLoggedIn] = useState(false);
   const [sessionError, setSessionError] = useState(false);
+
+  function setSection(next: Section) {
+    setSubview(null);
+    setSectionState(next);
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -116,6 +126,21 @@ export default function Home() {
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         {section === "menu" && <WeeklyMenu />}
+
+        {section === "shopping" && subview === "recipes" && (
+          <DishIngredients onBack={() => setSubview(null)} />
+        )}
+        {section === "shopping" && subview === "ingredients" && (
+          <IngredientsManager onBack={() => setSubview(null)} />
+        )}
+        {section === "shopping" && subview === null && (
+          <ShoppingList
+            onOpenMenu={() => setSection("menu")}
+            onOpenDishes={() => setSubview("recipes")}
+            onOpenIngredients={() => setSubview("ingredients")}
+          />
+        )}
+
         {section === "swipe" && <SwipeDishes />}
         {section === "add" && <AddDish />}
       </main>

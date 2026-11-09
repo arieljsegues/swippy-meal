@@ -1,8 +1,8 @@
 "use client";
 
-import { Utensils, Settings, Flame } from "lucide-react";
+import { Utensils, ShoppingCart, Settings, Flame } from "lucide-react";
 
-export type Section = "swipe" | "menu" | "add";
+export type Section = "menu" | "shopping" | "swipe" | "add";
 
 interface NavProps {
   section: Section;
@@ -16,6 +16,13 @@ const items = [
     icon: Utensils,
     activeClass: "bg-emerald-100 text-emerald-700",
     indicatorClass: "bg-emerald-500",
+  },
+  {
+    id: "shopping" as Section,
+    label: "Compra",
+    icon: ShoppingCart,
+    activeClass: "bg-amber-100 text-amber-700",
+    indicatorClass: "bg-amber-500",
   },
   {
     id: "swipe" as Section,
@@ -59,9 +66,11 @@ export default function Nav({ section, setSection }: NavProps) {
                 className="transition-transform duration-200"
               />
 
-              <span className={`text-xs font-semibold tracking-wide ${
-                active ? "" : "font-medium"
-              }`}>
+              <span
+                className={`text-xs font-semibold tracking-wide ${
+                  active ? "" : "font-medium"
+                }`}
+              >
                 {item.label}
               </span>
 
